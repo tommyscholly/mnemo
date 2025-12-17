@@ -1,0 +1,9 @@
+foo :: 1
+
+bar :: () -> (fn(int) -> int) @ R 
+  with R: region
+{
+  closure @ R := fn(x: int) = x + 5
+
+  return closure
+}

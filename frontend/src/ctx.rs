@@ -1,0 +1,41 @@
+// structure for the frontend to pass around to track data
+
+use std::collections::HashMap;
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct Symbol(u32);
+
+impl Symbol {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+pub struct Ctx {
+    strings: Vec<String>,
+    indices: HashMap<String, Symbol>,
+}
+
+impl Ctx {
+    pub fn new() -> Self {
+        Self {
+            strings: Vec::new(),
+            indices: HashMap::new(),
+        }
+    }
+
+    pub fn intern(&mut self, s: &str) -> Symbol {
+        if let Some(&sym) = self.indices.get(s) {
+            return sym;
+        }
+
+        let id = Symbol(self.strings.len() as u32);
+        self.strings.push(s.to_string());
+        self.indices.insert(s.to_string(), id);
+        id
+    }
+
+    pub fn resolve(&self, sym: Symbol) -> &str {
+        &self.strings[sym.0 as usize]
+    }
+}
