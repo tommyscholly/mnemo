@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::ast::{Block, Decl, Expr, Module, Params, Pat, Signature, Type, Value};
+use crate::ast::{Block, Decl, Expr, Module, Params, Pat, Signature, Stmt, Type, Value};
 use crate::ctx::{Ctx, Symbol};
 use crate::lex::{Keyword, Token};
 
@@ -24,10 +24,21 @@ fn expect_next(tokens: &mut VecDeque<Token>, token: Token) -> ParseResult<()> {
     Err(ParseError::Token)
 }
 
+fn expect_identifier(tokens: &mut VecDeque<Token>) -> ParseResult<Symbol> {
+    let Some(Token::Identifier(name)) = tokens.pop_front() else {
+        return Err(ParseError::Identifier);
+    };
+
+    Ok(name)
+}
+
 fn parse_expr(tokens: &mut VecDeque<Token>) -> ParseResult<Expr> {
     match tokens.pop_front() {
         Some(Token::Int(i)) => Ok(Expr::Value(Value::Int(i))),
-        _ => Err(ParseError::Expression),
+        t => {
+            println!("{t:?}");
+            Err(ParseError::Expression)
+        }
     }
 }
 
@@ -37,14 +48,12 @@ fn parse_params(tokens: &mut VecDeque<Token>) -> ParseResult<Params> {
         types: Vec::new(),
     };
     expect_next(tokens, Token::LParen)?;
-    loop {
+    while !tokens.is_empty() {
         if let Some(Token::RParen) = tokens.front() {
             break;
         }
 
-        let Some(Token::Identifier(name)) = tokens.pop_front() else {
-            return Err(ParseError::Identifier);
-        };
+        let name = expect_identifier(tokens)?;
 
         let Some(ty) = parse_type_annot(tokens)? else {
             return Err(ParseError::Type);
@@ -96,9 +105,37 @@ fn parse_type_annot(tokens: &mut VecDeque<Token>) -> ParseResult<Option<Type>> {
     }
 }
 
+fn parse_stmt(tokens: &mut VecDeque<Token>) -> ParseResult<Stmt> {
+    // TODO: change this expect to something else
+    let name = expect_identifier(tokens)?;
+    let stmt = match tokens.front() {
+        Some(Token::Colon) => {
+            let ty = parse_type_annot(tokens)?;
+            expect_next(tokens, Token::Eq)?;
+            let expr = parse_expr(tokens)?;
+            Stmt::ValDec { name, ty, expr }
+        }
+        Some(Token::Eq) => {
+            expect_next(tokens, Token::Eq)?;
+            let expr = parse_expr(tokens)?;
+            Stmt::Assign { name, expr }
+        }
+        _ => unimplemented!(),
+    };
+
+    Ok(stmt)
+}
+
 fn parse_block(tokens: &mut VecDeque<Token>) -> ParseResult<Block> {
     let mut stmts = Vec::new();
     expect_next(tokens, Token::LBrace)?;
+    while !tokens.is_empty() {
+        if let Some(Token::RBrace) = tokens.front() {
+            break;
+        }
+
+        stmts.push(parse_stmt(tokens)?);
+    }
     expect_next(tokens, Token::RBrace)?;
 
     Ok(Block { stmts, expr: None })
@@ -123,9 +160,7 @@ fn parse_procedure(
 fn parse_decls(_ctx: &mut Ctx, tokens: &mut VecDeque<Token>) -> ParseResult<Vec<Decl>> {
     let mut decs = Vec::new();
     while !tokens.is_empty() {
-        let Some(Token::Identifier(name)) = tokens.pop_front() else {
-            return Err(ParseError::Identifier);
-        };
+        let name = expect_identifier(tokens)?;
 
         let ty = parse_type_annot(tokens)?;
         let Some(Token::Colon) = tokens.pop_front() else {
@@ -178,7 +213,7 @@ mod tests {
         assert_eq!(
             decs[0],
             Decl::Constant {
-                name: Symbol::new(0),
+                name: Symbol(0),
                 ty: None,
                 expr: Expr::Value(Value::Int(1))
             }
@@ -194,7 +229,7 @@ mod tests {
         assert_eq!(
             decs[0],
             Decl::Constant {
-                name: Symbol::new(0),
+                name: Symbol(0),
                 ty: Some(Type::Int),
                 expr: Expr::Value(Value::Int(1))
             }
@@ -219,7 +254,7 @@ mod tests {
         assert_eq!(
             decs[0],
             Decl::Procedure {
-                name: Symbol::new(0),
+                name: Symbol(0),
                 fn_ty: None,
                 sig: Signature {
                     params: Params {
@@ -245,17 +280,59 @@ mod tests {
         assert_eq!(
             decs[0],
             Decl::Procedure {
-                name: Symbol::new(0),
+                name: Symbol(0),
                 fn_ty: None,
                 sig: Signature {
                     params: Params {
-                        patterns: vec![Pat::Symbol(Symbol::new(1)), Pat::Symbol(Symbol::new(2))],
+                        patterns: vec![Pat::Symbol(Symbol(1)), Pat::Symbol(Symbol(2))],
                         types: vec![Type::Int, Type::Int]
                     },
                     return_ty: Some(Type::Int)
                 },
                 block: Block {
                     stmts: vec![],
+                    expr: None
+                }
+            }
+        )
+    }
+
+    #[test]
+    fn proc_parse_with_min_body() {
+        let (mut ctx, mut tokens) = tokenify(
+            "foo :: (x: int, y: int): int { 
+                z := 1
+                x = 2
+            }",
+        );
+        let decs = parse_decls(&mut ctx, &mut tokens);
+        println!("{decs:?}");
+        assert!(decs.is_ok());
+        let decs = decs.unwrap();
+        assert_eq!(
+            decs[0],
+            Decl::Procedure {
+                name: Symbol(0),
+                fn_ty: None,
+                sig: Signature {
+                    params: Params {
+                        patterns: vec![Pat::Symbol(Symbol(1)), Pat::Symbol(Symbol(2))],
+                        types: vec![Type::Int, Type::Int]
+                    },
+                    return_ty: Some(Type::Int)
+                },
+                block: Block {
+                    stmts: vec![
+                        Stmt::ValDec {
+                            name: Symbol(3),
+                            ty: None,
+                            expr: Expr::Value(Value::Int(1))
+                        },
+                        Stmt::Assign {
+                            name: Symbol(1),
+                            expr: Expr::Value(Value::Int(2))
+                        }
+                    ],
                     expr: None
                 }
             }

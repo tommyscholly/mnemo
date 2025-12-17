@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub struct Symbol(u32);
+pub struct Symbol(pub u32);
 
 impl Symbol {
     pub fn new(id: u32) -> Self {
