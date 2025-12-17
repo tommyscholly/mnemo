@@ -3,6 +3,7 @@ mod ctx;
 mod lex;
 mod macros;
 mod parse;
+mod mir;
 
 use crate::ctx::Ctx;
 use std::fs::File;

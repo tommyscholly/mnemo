@@ -306,7 +306,6 @@ mod tests {
             }",
         );
         let decs = parse_decls(&mut ctx, &mut tokens);
-        println!("{decs:?}");
         assert!(decs.is_ok());
         let decs = decs.unwrap();
         assert_eq!(
