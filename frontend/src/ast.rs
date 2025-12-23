@@ -12,6 +12,12 @@ pub enum Type {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Call {
+    pub callee: Symbol,
+    pub args: Vec<Expr>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
     Value(Value),
     BinOp {
@@ -19,6 +25,8 @@ pub enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    // a function call that is used in an assignment or declaration
+    Call(Call),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -39,11 +47,12 @@ pub enum Stmt {
         ty: Option<Type>,
         expr: Expr,
     },
-
     Assign {
         name: Symbol,
         expr: Expr,
     },
+    // a function call with no assignment
+    Call(Call),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::ast::{Block, Decl, Expr, Module, Params, Pat, Signature, Stmt, Type, Value};
+use crate::ast::{Block, Call, Decl, Expr, Module, Params, Pat, Signature, Stmt, Type, Value};
 use crate::ctx::{Ctx, Symbol};
 use crate::lex::{BinOp, Keyword, Token};
 
@@ -96,10 +96,37 @@ fn parse_multiplicative(tokens: &mut VecDeque<Token>) -> ParseResult<Expr> {
     Ok(left)
 }
 
+fn parse_identifier(ident: Symbol, tokens: &mut VecDeque<Token>) -> ParseResult<Expr> {
+    if let Some(Token::LParen) = tokens.front() {
+        let mut args = Vec::new();
+        tokens.pop_front();
+        loop {
+            if let Some(Token::RParen) = tokens.front() {
+                break;
+            }
+
+            args.push(parse_expr(tokens)?);
+
+            if let Some(Token::Comma) = tokens.front() {
+                tokens.pop_front();
+            } else {
+                break;
+            }
+        }
+        tokens.pop_front();
+        return Ok(Expr::Call(Call {
+            callee: ident,
+            args,
+        }));
+    }
+
+    Ok(Expr::Value(Value::Ident(ident)))
+}
+
 fn parse_primary(tokens: &mut VecDeque<Token>) -> ParseResult<Expr> {
     match tokens.pop_front() {
         Some(Token::Int(i)) => Ok(Expr::Value(Value::Int(i))),
-        Some(Token::Identifier(name)) => Ok(Expr::Value(Value::Ident(name))),
+        Some(Token::Identifier(name)) => parse_identifier(name, tokens),
         Some(Token::LParen) => {
             let expr = parse_expr(tokens)?;
             match tokens.pop_front() {
@@ -192,6 +219,13 @@ fn parse_stmt(tokens: &mut VecDeque<Token>) -> ParseResult<Stmt> {
             let expr = parse_expr(tokens)?;
             Stmt::Assign { name, expr }
         }
+        Some(Token::LParen) => {
+            let Expr::Call(c) = parse_identifier(name, tokens)? else {
+                unreachable!()
+            };
+            Stmt::Call(c)
+        }
+
         _ => unimplemented!(),
     };
 
@@ -276,203 +310,183 @@ mod tests {
         (ctx, tokens)
     }
 
+    fn parse_decls_from(input: &str) -> ParseResult<Vec<Decl>> {
+        let (mut ctx, mut tokens) = tokenify(input);
+        parse_decls(&mut ctx, &mut tokens)
+    }
+
+    fn expect_decl(input: &str, expected: Decl) {
+        let decs = parse_decls_from(input).expect("expected parsing to succeed");
+        assert!(
+            !decs.is_empty(),
+            "expected at least one declaration from input `{input}`"
+        );
+        assert_eq!(decs[0], expected);
+    }
+
+    fn expect_err(input: &str, error: ParseError) {
+        assert_eq!(parse_decls_from(input), Err(error));
+    }
+
     #[test]
     fn constant_parse() {
-        let (mut ctx, mut tokens) = tokenify("foo :: 1");
-        let decs = parse_decls(&mut ctx, &mut tokens);
-        assert!(decs.is_ok());
-        let decs = decs.unwrap();
-        assert_eq!(
-            decs[0],
+        expect_decl(
+            "foo :: 1",
             Decl::Constant {
                 name: Symbol(0),
                 ty: None,
-                expr: Expr::Value(Value::Int(1))
-            }
-        )
+                expr: Expr::Value(Value::Int(1)),
+            },
+        );
     }
 
     #[test]
     fn constant_parse_type_annot() {
-        let (mut ctx, mut tokens) = tokenify("foo: int : 1");
-        let decs = parse_decls(&mut ctx, &mut tokens);
-        assert!(decs.is_ok());
-        let decs = decs.unwrap();
-        assert_eq!(
-            decs[0],
+        expect_decl(
+            "foo: int : 1",
             Decl::Constant {
                 name: Symbol(0),
                 ty: Some(Type::Int),
-                expr: Expr::Value(Value::Int(1))
-            }
-        )
+                expr: Expr::Value(Value::Int(1)),
+            },
+        );
     }
 
     #[test]
     fn constant_err_no_expr() {
-        let (mut ctx, mut tokens) = tokenify("foo ::");
-        let decs = parse_decls(&mut ctx, &mut tokens);
-        assert!(decs.is_err());
-        assert_eq!(decs, Err(ParseError::Expression));
+        expect_err("foo ::", ParseError::Expression);
     }
 
     #[test]
     fn proc_parse() {
-        let (mut ctx, mut tokens) = tokenify("foo :: () {}");
-        let decs = parse_decls(&mut ctx, &mut tokens);
-        println!("{decs:?}");
-        assert!(decs.is_ok());
-        let decs = decs.unwrap();
-        assert_eq!(
-            decs[0],
+        expect_decl(
+            "foo :: () {}",
             Decl::Procedure {
                 name: Symbol(0),
                 fn_ty: None,
                 sig: Signature {
                     params: Params {
                         patterns: vec![],
-                        types: vec![]
+                        types: vec![],
                     },
-                    return_ty: None
+                    return_ty: None,
                 },
                 block: Block {
                     stmts: vec![],
-                    expr: None
-                }
-            }
-        )
+                    expr: None,
+                },
+            },
+        );
     }
 
     #[test]
     fn proc_parse_params_ret() {
-        let (mut ctx, mut tokens) = tokenify("foo :: (x: int, y: int): int {}");
-        let decs = parse_decls(&mut ctx, &mut tokens);
-        assert!(decs.is_ok());
-        let decs = decs.unwrap();
-        assert_eq!(
-            decs[0],
+        expect_decl(
+            "foo :: (x: int, y: int): int {}",
             Decl::Procedure {
                 name: Symbol(0),
                 fn_ty: None,
                 sig: Signature {
                     params: Params {
                         patterns: vec![Pat::Symbol(Symbol(1)), Pat::Symbol(Symbol(2))],
-                        types: vec![Type::Int, Type::Int]
+                        types: vec![Type::Int, Type::Int],
                     },
-                    return_ty: Some(Type::Int)
+                    return_ty: Some(Type::Int),
                 },
                 block: Block {
                     stmts: vec![],
-                    expr: None
-                }
-            }
-        )
+                    expr: None,
+                },
+            },
+        );
     }
 
     #[test]
     fn proc_parse_with_min_body() {
-        let (mut ctx, mut tokens) = tokenify(
+        expect_decl(
             "foo :: (x: int, y: int): int { 
                 z := 1
                 x = 2
             }",
-        );
-        let decs = parse_decls(&mut ctx, &mut tokens);
-        assert!(decs.is_ok());
-        let decs = decs.unwrap();
-        assert_eq!(
-            decs[0],
             Decl::Procedure {
                 name: Symbol(0),
                 fn_ty: None,
                 sig: Signature {
                     params: Params {
                         patterns: vec![Pat::Symbol(Symbol(1)), Pat::Symbol(Symbol(2))],
-                        types: vec![Type::Int, Type::Int]
+                        types: vec![Type::Int, Type::Int],
                     },
-                    return_ty: Some(Type::Int)
+                    return_ty: Some(Type::Int),
                 },
                 block: Block {
                     stmts: vec![
                         Stmt::ValDec {
                             name: Symbol(3),
                             ty: None,
-                            expr: Expr::Value(Value::Int(1))
+                            expr: Expr::Value(Value::Int(1)),
                         },
                         Stmt::Assign {
                             name: Symbol(1),
-                            expr: Expr::Value(Value::Int(2))
-                        }
+                            expr: Expr::Value(Value::Int(2)),
+                        },
                     ],
-                    expr: None
-                }
-            }
-        )
+                    expr: None,
+                },
+            },
+        );
     }
 
     #[test]
     fn proc_parse_with_min_body_and_type_annot() {
-        let (mut ctx, mut tokens) = tokenify(
+        expect_decl(
             "foo :: (x: int, y: int): int { 
                 z : int = 1
                 x = 2
             }",
-        );
-        let decs = parse_decls(&mut ctx, &mut tokens);
-        assert!(decs.is_ok());
-        let decs = decs.unwrap();
-        assert_eq!(
-            decs[0],
             Decl::Procedure {
                 name: Symbol(0),
                 fn_ty: None,
                 sig: Signature {
                     params: Params {
                         patterns: vec![Pat::Symbol(Symbol(1)), Pat::Symbol(Symbol(2))],
-                        types: vec![Type::Int, Type::Int]
+                        types: vec![Type::Int, Type::Int],
                     },
-                    return_ty: Some(Type::Int)
+                    return_ty: Some(Type::Int),
                 },
                 block: Block {
                     stmts: vec![
                         Stmt::ValDec {
                             name: Symbol(3),
                             ty: Some(Type::Int),
-                            expr: Expr::Value(Value::Int(1))
+                            expr: Expr::Value(Value::Int(1)),
                         },
                         Stmt::Assign {
                             name: Symbol(1),
-                            expr: Expr::Value(Value::Int(2))
-                        }
+                            expr: Expr::Value(Value::Int(2)),
+                        },
                     ],
-                    expr: None
-                }
-            }
-        )
+                    expr: None,
+                },
+            },
+        );
     }
 
     #[test]
     fn proc_parse_with_bin_op() {
-        let (mut ctx, mut tokens) = tokenify(
+        expect_decl(
             "foo :: (x: int, y: int): int { 
                 z : int = 1 + 2
                 x = z + y
             }",
-        );
-        let decs = parse_decls(&mut ctx, &mut tokens);
-        assert!(decs.is_ok());
-        let decs = decs.unwrap();
-        assert_eq!(
-            decs[0],
             Decl::Procedure {
                 name: Symbol(0),
                 fn_ty: None,
                 sig: Signature {
                     params: Params {
                         patterns: vec![Pat::Symbol(Symbol(1)), Pat::Symbol(Symbol(2))],
-                        types: vec![Type::Int, Type::Int]
+                        types: vec![Type::Int, Type::Int],
                     },
-                    return_ty: Some(Type::Int)
+                    return_ty: Some(Type::Int),
                 },
                 block: Block {
                     stmts: vec![
@@ -482,21 +496,60 @@ mod tests {
                             expr: Expr::BinOp {
                                 op: BinOp::Add,
                                 lhs: Box::new(Expr::Value(Value::Int(1))),
-                                rhs: Box::new(Expr::Value(Value::Int(2)))
-                            }
+                                rhs: Box::new(Expr::Value(Value::Int(2))),
+                            },
                         },
                         Stmt::Assign {
                             name: Symbol(1),
                             expr: Expr::BinOp {
                                 op: BinOp::Add,
                                 lhs: Box::new(Expr::Value(Value::Ident(Symbol(3)))),
-                                rhs: Box::new(Expr::Value(Value::Ident(Symbol(2))))
-                            }
-                        }
+                                rhs: Box::new(Expr::Value(Value::Ident(Symbol(2)))),
+                            },
+                        },
                     ],
-                    expr: None
-                }
-            }
-        )
+                    expr: None,
+                },
+            },
+        );
+    }
+
+    #[test]
+    fn proc_parse_with_call() {
+        expect_decl(
+            "foo :: (x: int, y: int): int { 
+                z : int = x + y
+                println(z)
+            }",
+            Decl::Procedure {
+                name: Symbol(0),
+                fn_ty: None,
+                sig: Signature {
+                    params: Params {
+                        patterns: vec![Pat::Symbol(Symbol(1)), Pat::Symbol(Symbol(2))],
+                        types: vec![Type::Int, Type::Int],
+                    },
+                    return_ty: Some(Type::Int),
+                },
+                block: Block {
+                    stmts: vec![
+                        Stmt::ValDec {
+                            name: Symbol(3),
+                            ty: Some(Type::Int),
+                            expr: Expr::BinOp {
+                                op: BinOp::Add,
+                                lhs: Box::new(Expr::Value(Value::Ident(Symbol(1)))),
+                                rhs: Box::new(Expr::Value(Value::Ident(Symbol(2)))),
+                            },
+                        },
+                        Stmt::Call(Call {
+                            callee: Symbol(4),
+                            args: vec![Expr::Value(Value::Ident(Symbol(3)))],
+                        }),
+                    ],
+                    expr: None,
+                },
+            },
+        );
     }
 }
