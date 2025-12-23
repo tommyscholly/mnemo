@@ -337,4 +337,45 @@ mod tests {
             }
         )
     }
+
+    #[test]
+    fn proc_parse_with_min_body_and_type_annot() {
+        let (mut ctx, mut tokens) = tokenify(
+            "foo :: (x: int, y: int): int { 
+                z : int = 1
+                x = 2
+            }",
+        );
+        let decs = parse_decls(&mut ctx, &mut tokens);
+        assert!(decs.is_ok());
+        let decs = decs.unwrap();
+        assert_eq!(
+            decs[0],
+            Decl::Procedure {
+                name: Symbol(0),
+                fn_ty: None,
+                sig: Signature {
+                    params: Params {
+                        patterns: vec![Pat::Symbol(Symbol(1)), Pat::Symbol(Symbol(2))],
+                        types: vec![Type::Int, Type::Int]
+                    },
+                    return_ty: Some(Type::Int)
+                },
+                block: Block {
+                    stmts: vec![
+                        Stmt::ValDec {
+                            name: Symbol(3),
+                            ty: Some(Type::Int),
+                            expr: Expr::Value(Value::Int(1))
+                        },
+                        Stmt::Assign {
+                            name: Symbol(1),
+                            expr: Expr::Value(Value::Int(2))
+                        }
+                    ],
+                    expr: None
+                }
+            }
+        )
+    }
 }
