@@ -1,8 +1,9 @@
-use crate::ctx::Symbol;
+use crate::{ctx::Symbol, lex::BinOp};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Value {
     Int(i32),
+    Ident(Symbol),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -13,6 +14,11 @@ pub enum Type {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
     Value(Value),
+    BinOp {
+        op: BinOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

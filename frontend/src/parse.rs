@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use crate::ast::{Block, Decl, Expr, Module, Params, Pat, Signature, Stmt, Type, Value};
 use crate::ctx::{Ctx, Symbol};
-use crate::lex::{Keyword, Token};
+use crate::lex::{BinOp, Keyword, Token};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
@@ -32,9 +32,81 @@ fn expect_identifier(tokens: &mut VecDeque<Token>) -> ParseResult<Symbol> {
     Ok(name)
 }
 
+// fn parse_expr(tokens: &mut VecDeque<Token>) -> ParseResult<Expr> {
+//     match tokens.pop_front() {
+//         Some(Token::Int(i)) => Ok(Expr::Value(Value::Int(i))),
+//         t => {
+//             println!("{t:?}");
+//             Err(ParseError::Expression)
+//         }
+//     }
+// }
+
 fn parse_expr(tokens: &mut VecDeque<Token>) -> ParseResult<Expr> {
+    parse_additive(tokens)
+}
+
+fn parse_additive(tokens: &mut VecDeque<Token>) -> ParseResult<Expr> {
+    let mut left = parse_multiplicative(tokens)?;
+
+    while let Some(op) = tokens.front() {
+        match op {
+            Token::BinOp(BinOp::Add) | Token::BinOp(BinOp::Sub) => {
+                let op = tokens.pop_front().unwrap();
+                let right = parse_multiplicative(tokens)?;
+                left = Expr::BinOp {
+                    op: match op {
+                        Token::BinOp(BinOp::Add) => BinOp::Add,
+                        Token::BinOp(BinOp::Sub) => BinOp::Sub,
+                        _ => unreachable!(),
+                    },
+                    lhs: Box::new(left),
+                    rhs: Box::new(right),
+                };
+            }
+            _ => break,
+        }
+    }
+
+    Ok(left)
+}
+
+fn parse_multiplicative(tokens: &mut VecDeque<Token>) -> ParseResult<Expr> {
+    let mut left = parse_primary(tokens)?;
+
+    while let Some(op) = tokens.front() {
+        match op {
+            Token::BinOp(BinOp::Mul) | Token::BinOp(BinOp::Div) => {
+                let op = tokens.pop_front().unwrap();
+                let right = parse_primary(tokens)?;
+                left = Expr::BinOp {
+                    op: match op {
+                        Token::BinOp(BinOp::Mul) => BinOp::Mul,
+                        Token::BinOp(BinOp::Div) => BinOp::Div,
+                        _ => unreachable!(),
+                    },
+                    lhs: Box::new(left),
+                    rhs: Box::new(right),
+                };
+            }
+            _ => break,
+        }
+    }
+
+    Ok(left)
+}
+
+fn parse_primary(tokens: &mut VecDeque<Token>) -> ParseResult<Expr> {
     match tokens.pop_front() {
         Some(Token::Int(i)) => Ok(Expr::Value(Value::Int(i))),
+        Some(Token::Identifier(name)) => Ok(Expr::Value(Value::Ident(name))),
+        Some(Token::LParen) => {
+            let expr = parse_expr(tokens)?;
+            match tokens.pop_front() {
+                Some(Token::RParen) => Ok(expr),
+                _ => Err(ParseError::Expression),
+            }
+        }
         t => {
             println!("{t:?}");
             Err(ParseError::Expression)
@@ -371,6 +443,55 @@ mod tests {
                         Stmt::Assign {
                             name: Symbol(1),
                             expr: Expr::Value(Value::Int(2))
+                        }
+                    ],
+                    expr: None
+                }
+            }
+        )
+    }
+
+    #[test]
+    fn proc_parse_with_bin_op() {
+        let (mut ctx, mut tokens) = tokenify(
+            "foo :: (x: int, y: int): int { 
+                z : int = 1 + 2
+                x = z + y
+            }",
+        );
+        let decs = parse_decls(&mut ctx, &mut tokens);
+        assert!(decs.is_ok());
+        let decs = decs.unwrap();
+        assert_eq!(
+            decs[0],
+            Decl::Procedure {
+                name: Symbol(0),
+                fn_ty: None,
+                sig: Signature {
+                    params: Params {
+                        patterns: vec![Pat::Symbol(Symbol(1)), Pat::Symbol(Symbol(2))],
+                        types: vec![Type::Int, Type::Int]
+                    },
+                    return_ty: Some(Type::Int)
+                },
+                block: Block {
+                    stmts: vec![
+                        Stmt::ValDec {
+                            name: Symbol(3),
+                            ty: Some(Type::Int),
+                            expr: Expr::BinOp {
+                                op: BinOp::Add,
+                                lhs: Box::new(Expr::Value(Value::Int(1))),
+                                rhs: Box::new(Expr::Value(Value::Int(2)))
+                            }
+                        },
+                        Stmt::Assign {
+                            name: Symbol(1),
+                            expr: Expr::BinOp {
+                                op: BinOp::Add,
+                                lhs: Box::new(Expr::Value(Value::Ident(Symbol(3)))),
+                                rhs: Box::new(Expr::Value(Value::Ident(Symbol(2))))
+                            }
                         }
                     ],
                     expr: None
