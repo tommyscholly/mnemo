@@ -4,10 +4,12 @@ mod lex;
 mod macros;
 mod parse;
 mod mir;
+mod ast_visitor;
 
 use crate::ctx::Ctx;
 use std::fs::File;
 use std::io::Read;
+use ast_visitor::{AstToMIR, AstVisitor};
 
 pub fn do_frontend(file: &str) {
     let mut file = File::open(file).unwrap();
@@ -23,5 +25,8 @@ pub fn do_frontend(file: &str) {
         .map(|t| t.unwrap().0)
         .collect();
 
-    let _module = parse::parse(&mut ctx, tokens);
+    let module = parse::parse(&mut ctx, tokens).unwrap();
+
+    let mut ast_visitor = AstToMIR::new(ctx);
+    ast_visitor.visit_module(module);
 }

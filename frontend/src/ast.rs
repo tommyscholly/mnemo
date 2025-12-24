@@ -17,6 +17,14 @@ pub struct Call {
     pub args: Vec<Expr>,
 }
 
+// possibly make this both a statement and an expression
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct IfElse {
+    pub cond: Expr,
+    pub then: Block,
+    pub else_: Option<Block>,
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
     Value(Value),
@@ -53,6 +61,7 @@ pub enum Stmt {
     },
     // a function call with no assignment
     Call(Call),
+    IfElse(IfElse),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

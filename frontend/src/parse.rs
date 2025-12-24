@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 
-use crate::ast::{Block, Call, Decl, Expr, Module, Params, Pat, Signature, Stmt, Type, Value};
+use crate::ast::{
+    Block, Call, Decl, Expr, IfElse, Module, Params, Pat, Signature, Stmt, Type, Value,
+};
 use crate::ctx::{Ctx, Symbol};
 use crate::lex::{BinOp, Keyword, Token};
 
@@ -26,6 +28,7 @@ fn expect_next(tokens: &mut VecDeque<Token>, token: Token) -> ParseResult<()> {
 
 fn expect_identifier(tokens: &mut VecDeque<Token>) -> ParseResult<Symbol> {
     let Some(Token::Identifier(name)) = tokens.pop_front() else {
+        println!("{tokens:?}");
         return Err(ParseError::Identifier);
     };
 
@@ -204,32 +207,51 @@ fn parse_type_annot(tokens: &mut VecDeque<Token>) -> ParseResult<Option<Type>> {
     }
 }
 
-fn parse_stmt(tokens: &mut VecDeque<Token>) -> ParseResult<Stmt> {
-    // TODO: change this expect to something else
-    let name = expect_identifier(tokens)?;
-    let stmt = match tokens.front() {
-        Some(Token::Colon) => {
-            let ty = parse_type_annot(tokens)?;
-            expect_next(tokens, Token::Eq)?;
-            let expr = parse_expr(tokens)?;
-            Stmt::ValDec { name, ty, expr }
-        }
-        Some(Token::Eq) => {
-            expect_next(tokens, Token::Eq)?;
-            let expr = parse_expr(tokens)?;
-            Stmt::Assign { name, expr }
-        }
-        Some(Token::LParen) => {
-            let Expr::Call(c) = parse_identifier(name, tokens)? else {
-                unreachable!()
-            };
-            Stmt::Call(c)
-        }
+fn parse_ifelse(tokens: &mut VecDeque<Token>) -> ParseResult<Stmt> {
+    expect_next(tokens, Token::Keyword(Keyword::If))?;
+    let cond = parse_expr(tokens)?;
+    let then = parse_block(tokens)?;
 
-        _ => unimplemented!(),
+    let else_ = if let Some(Token::Keyword(Keyword::Else)) = tokens.front() {
+        expect_next(tokens, Token::Keyword(Keyword::Else))?;
+        Some(parse_block(tokens)?)
+    } else {
+        None
     };
 
-    Ok(stmt)
+    Ok(Stmt::IfElse(IfElse { cond, then, else_ }))
+}
+
+fn parse_stmt(tokens: &mut VecDeque<Token>) -> ParseResult<Stmt> {
+    // TODO: change this expect to something else
+    match tokens.front() {
+        Some(Token::Keyword(Keyword::If)) => parse_ifelse(tokens),
+        _ => {
+            let name = expect_identifier(tokens)?;
+            let stmt = match tokens.front() {
+                Some(Token::Colon) => {
+                    let ty = parse_type_annot(tokens)?;
+                    expect_next(tokens, Token::Eq)?;
+                    let expr = parse_expr(tokens)?;
+                    Stmt::ValDec { name, ty, expr }
+                }
+                Some(Token::Eq) => {
+                    expect_next(tokens, Token::Eq)?;
+                    let expr = parse_expr(tokens)?;
+                    Stmt::Assign { name, expr }
+                }
+                Some(Token::LParen) => {
+                    let Expr::Call(c) = parse_identifier(name, tokens)? else {
+                        unreachable!()
+                    };
+                    Stmt::Call(c)
+                }
+                _ => unimplemented!(),
+            };
+
+            Ok(stmt)
+        }
+    }
 }
 
 fn parse_block(tokens: &mut VecDeque<Token>) -> ParseResult<Block> {
@@ -543,7 +565,7 @@ mod tests {
                             },
                         },
                         Stmt::Call(Call {
-                            callee: Symbol(4),
+                            callee: Symbol(-1),
                             args: vec![Expr::Value(Value::Ident(Symbol(3)))],
                         }),
                     ],
@@ -551,5 +573,64 @@ mod tests {
                 },
             },
         );
+    }
+
+    #[test]
+    fn proc_parse_with_bad_binop() {
+        expect_err(
+            "foo :: (x: int, y: int): int { 
+                z : int = x +
+            }",
+            ParseError::Expression,
+        );
+    }
+
+    #[test]
+    fn proc_parse_with_ifelse() {
+        expect_decl(
+            "foo :: (x: int, y: int): int { 
+                if x {
+                    println(x)
+                } else {
+                    println(y)
+                }
+            }",
+            Decl::Procedure {
+                name: Symbol(0),
+                fn_ty: None,
+                sig: Signature {
+                    params: Params {
+                        patterns: vec![Pat::Symbol(Symbol(1)), Pat::Symbol(Symbol(2))],
+                        types: vec![Type::Int, Type::Int],
+                    },
+                    return_ty: Some(Type::Int),
+                },
+                block: Block {
+                    stmts: vec![Stmt::IfElse(IfElse {
+                        // cond: Expr::BinOp {
+                        //     op: BinOp::Gt,
+                        //     lhs: Box::new(Expr::Value(Value::Ident(Symbol(1)))),
+                        //     rhs: Box::new(Expr::Value(Value::Ident(Symbol(2)))),
+                        // },
+                        cond: Expr::Value(Value::Ident(Symbol(1))),
+                        then: Block {
+                            stmts: vec![Stmt::Call(Call {
+                                callee: Symbol(-1),
+                                args: vec![Expr::Value(Value::Ident(Symbol(1)))],
+                            })],
+                            expr: None,
+                        },
+                        else_: Some(Block {
+                            stmts: vec![Stmt::Call(Call {
+                                callee: Symbol(-1),
+                                args: vec![Expr::Value(Value::Ident(Symbol(2)))],
+                            })],
+                            expr: None,
+                        }),
+                    })],
+                    expr: None,
+                },
+            },
+        )
     }
 }
