@@ -33,6 +33,7 @@ pub struct AstToMIR {
     symbol_table: HashMap<Symbol, mir::LocalId>,
     function_table: HashMap<Symbol, Function>,
     constants: HashMap<Symbol, mir::RValue>,
+    phi_functions_to_generate: Vec<(mir::LocalId, usize)>,
 }
 
 impl AstToMIR {
@@ -55,15 +56,17 @@ impl AstToMIR {
             symbol_table: HashMap::new(),
             function_table,
             constants: HashMap::new(),
+            phi_functions_to_generate: Vec::new(),
         }
     }
 
     fn new_local(&mut self, ty: Type) -> mir::LocalId {
         let ty = ast_type_to_mir_type(&ty);
-        let local = mir::Local { ty };
         let current_function = self.get_current_function();
+        let local_id = current_function.locals.len();
+        let local = mir::Local::new(local_id, ty);
         current_function.locals.push(local);
-        current_function.locals.len() - 1
+        local_id
     }
 
     // BLOCKS USE 1 BASED INDEXING
@@ -138,7 +141,19 @@ impl AstVisitor for AstToMIR {
                 let block = self.get_current_block();
                 block.stmts.push(stmt);
             }
-            Stmt::Assign { name: _, expr: _ } => todo!(),
+            Stmt::Assign { name, expr } => {
+                let local_id = self.symbol_table[&name];
+                let rvalue = self.visit_expr(expr);
+                let old_local = &self.get_current_function().locals[local_id];
+
+                let new_local =
+                    mir::Local::new_version(local_id, old_local.ty.clone(), old_local.version + 1);
+
+                self.phi_functions_to_generate.push((local_id, new_local.version));
+                self.get_current_function().locals[local_id] = new_local;
+                
+                let stmt = mir::Statement::Assign(, ())
+            }
             Stmt::Call(Call { callee, args }) => {
                 println!("calling {:?} in {}", callee, self.current_block);
                 let args = args.into_iter().map(|a| self.visit_expr(a)).collect();
@@ -170,29 +185,41 @@ impl AstVisitor for AstToMIR {
                 let mut then_block = mir::BasicBlock::new(then_block_entrance_id);
                 // SAFETY: safe to do because we always know there will be another block
                 // TODO: figure out basic block params
-                then_block.terminator = mir::Terminator::Br(then_block_entrance_id + 1, vec![]);
+                then_block.terminator = mir::Terminator::Br(then_block_entrance_id + 1);
                 self.get_current_function().blocks.push(then_block);
                 self.current_block = then_block_entrance_id;
                 self.visit_block(then);
 
-                if let Some(else_) = else_ {
+                let mut else_block_id = if let Some(else_) = else_ {
                     let else_block_entrance_id = self.current_block + 1;
                     let mut else_block = mir::BasicBlock::new(else_block_entrance_id);
                     // SAFETY: same as above
                     // TODO: figure out basic block params
-                    else_block.terminator = mir::Terminator::Br(else_block_entrance_id + 1, vec![]);
+                    else_block.terminator = mir::Terminator::Br(else_block_entrance_id + 1);
                     self.get_current_function().blocks.push(else_block);
                     self.current_block = else_block_entrance_id;
                     self.visit_block(else_);
-                }
+                    Some(else_block_entrance_id)
+                } else {
+                    None
+                };
 
                 let join_block_entrance_id = self.current_block + 1;
                 let join_block = mir::BasicBlock::new(join_block_entrance_id);
                 self.get_current_function().blocks.push(join_block);
                 self.current_block = join_block_entrance_id;
 
-                let if_transfer =
-                    mir::Terminator::BrIf(cond_local, then_block_entrance_id, else_block_id);
+                if let Some(id) = else_block_id {
+                    self.get_block(id).terminator = mir::Terminator::Br(join_block_entrance_id);
+                }
+
+                else_block_id.get_or_insert(join_block_entrance_id);
+
+                let if_transfer = mir::Terminator::BrIf(
+                    cond_local,
+                    then_block_entrance_id,
+                    else_block_id.unwrap(),
+                );
                 self.get_block(current_block_id).terminator = if_transfer;
             }
         }
