@@ -33,7 +33,7 @@ pub struct AstToMIR {
     symbol_table: HashMap<Symbol, mir::LocalId>,
     function_table: HashMap<Symbol, Function>,
     constants: HashMap<Symbol, mir::RValue>,
-    phi_functions_to_generate: Vec<(mir::LocalId, usize)>,
+    phi_functions_to_generate: HashMap<mir::LocalId, Vec<mir::LocalId>>,
 }
 
 impl AstToMIR {
@@ -56,12 +56,20 @@ impl AstToMIR {
             symbol_table: HashMap::new(),
             function_table,
             constants: HashMap::new(),
-            phi_functions_to_generate: Vec::new(),
+            phi_functions_to_generate: HashMap::new(),
         }
     }
 
     fn new_local(&mut self, ty: Type) -> mir::LocalId {
         let ty = ast_type_to_mir_type(&ty);
+        let current_function = self.get_current_function();
+        let local_id = current_function.locals.len();
+        let local = mir::Local::new(local_id, ty);
+        current_function.locals.push(local);
+        local_id
+    }
+
+    fn new_local_with_ty(&mut self, ty: mir::Ty) -> mir::LocalId {
         let current_function = self.get_current_function();
         let local_id = current_function.locals.len();
         let local = mir::Local::new(local_id, ty);
@@ -145,14 +153,16 @@ impl AstVisitor for AstToMIR {
                 let local_id = self.symbol_table[&name];
                 let rvalue = self.visit_expr(expr);
                 let old_local = &self.get_current_function().locals[local_id];
+                let ty = old_local.ty.clone();
+                let new_local_id = self.new_local_with_ty(ty);
 
-                let new_local =
-                    mir::Local::new_version(local_id, old_local.ty.clone(), old_local.version + 1);
+                self.phi_functions_to_generate
+                    .entry(local_id)
+                    .or_default()
+                    .push(new_local_id);
 
-                self.phi_functions_to_generate.push((local_id, new_local.version));
-                self.get_current_function().locals[local_id] = new_local;
-                
-                let stmt = mir::Statement::Assign(, ())
+                let stmt = mir::Statement::Assign(new_local_id, rvalue);
+                self.get_current_block().stmts.push(stmt);
             }
             Stmt::Call(Call { callee, args }) => {
                 println!("calling {:?} in {}", callee, self.current_block);
@@ -208,6 +218,12 @@ impl AstVisitor for AstToMIR {
                 let join_block = mir::BasicBlock::new(join_block_entrance_id);
                 self.get_current_function().blocks.push(join_block);
                 self.current_block = join_block_entrance_id;
+
+                let phi_functions_to_generate = std::mem::take(&mut self.phi_functions_to_generate);
+                for (local_id, phi_ids) in phi_functions_to_generate {
+                    let phi = mir::Statement::Phi(local_id, phi_ids);
+                    self.get_current_block().stmts.push(phi);
+                }
 
                 if let Some(id) = else_block_id {
                     self.get_block(id).terminator = mir::Terminator::Br(join_block_entrance_id);
@@ -314,8 +330,10 @@ mod tests {
         let (mut ctx, tokens) = tokenify(
             "foo :: (x: int, y: int): int { 
                 if x {
+                    x = x + 1
                     println(x)
                 } else {
+                    y = y + 1
                     println(y)
                 }
             }",

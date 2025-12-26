@@ -66,7 +66,6 @@ impl BasicBlock {
 #[derive(Debug)]
 pub struct Local {
     pub id: LocalId,
-    pub version: usize,
     pub ty: Ty,
 }
 
@@ -74,15 +73,6 @@ impl Local {
     pub fn new(local_id: LocalId, ty: Ty) -> Self {
         Self {
             id: local_id,
-            version: 0,
-            ty,
-        }
-    }
-
-    pub fn new_version(local_id: LocalId, ty: Ty, version: usize) -> Self {
-        Self {
-            id: local_id,
-            version,
             ty,
         }
     }
