@@ -1,5 +1,6 @@
 use crate::ctx::{Ctx, Symbol};
 use crate::{advance_single_token, handle_operator};
+use std::fmt::Display;
 use std::iter::Peekable;
 
 pub type Span = std::ops::Range<usize>;
@@ -82,6 +83,26 @@ pub enum BinOp {
     GtEq,
     Lt,
     LtEq,
+}
+
+impl Display for BinOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BinOp::Add => write!(f, "+"),
+            BinOp::Sub => write!(f, "-"),
+            BinOp::Mul => write!(f, "*"),
+            BinOp::Div => write!(f, "/"),
+            BinOp::Mod => write!(f, "%"),
+            BinOp::And => write!(f, "and"),
+            BinOp::Or => write!(f, "or"),
+            BinOp::EqEq => write!(f, "=="),
+            BinOp::NEq => write!(f, "!="),
+            BinOp::Gt => write!(f, ">"),
+            BinOp::GtEq => write!(f, ">="),
+            BinOp::Lt => write!(f, "<"),
+            BinOp::LtEq => write!(f, "<="),
+        }
+    }
 }
 
 impl TryFrom<&str> for BinOp {

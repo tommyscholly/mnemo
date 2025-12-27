@@ -1,3 +1,9 @@
+#![allow(unused)]
+
+pub mod visualize;
+
+use std::fmt::Display;
+
 use crate::lex::BinOp;
 
 // corresponds to locals in the defining function
@@ -10,6 +16,16 @@ pub enum Ty {
     Bool,
     Char,
     Int,
+}
+
+impl Display for Ty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Ty::Bool => write!(f, "bool"),
+            Ty::Char => write!(f, "char"),
+            Ty::Int => write!(f, "int"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -71,10 +87,7 @@ pub struct Local {
 
 impl Local {
     pub fn new(local_id: LocalId, ty: Ty) -> Self {
-        Self {
-            id: local_id,
-            ty,
-        }
+        Self { id: local_id, ty }
     }
 }
 

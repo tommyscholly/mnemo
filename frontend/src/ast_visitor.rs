@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::ctx::{Ctx, Symbol};
+use crate::mir::visualize::MIRVisualizer;
 use crate::mir::{self, Function};
 
 use std::collections::HashMap;
@@ -13,6 +14,10 @@ fn ast_type_to_mir_type(ty: &Type) -> mir::Ty {
         #[allow(unreachable_patterns)]
         _ => todo!(),
     }
+}
+
+pub struct MIRCtx {
+    pub function_table: HashMap<Symbol, mir::Function>,
 }
 
 pub trait AstVisitor {
@@ -165,7 +170,6 @@ impl AstVisitor for AstToMIR {
                 self.get_current_block().stmts.push(stmt);
             }
             Stmt::Call(Call { callee, args }) => {
-                println!("calling {:?} in {}", callee, self.current_block);
                 let args = args.into_iter().map(|a| self.visit_expr(a)).collect();
 
                 let next_block_idx = self.current_block + 1;
@@ -209,7 +213,8 @@ impl AstVisitor for AstToMIR {
                     self.get_current_function().blocks.push(else_block);
                     self.current_block = else_block_entrance_id;
                     self.visit_block(else_);
-                    Some(else_block_entrance_id)
+                    let newest_block = self.get_current_block().block_id;
+                    Some(newest_block)
                 } else {
                     None
                 };
@@ -245,7 +250,6 @@ impl AstVisitor for AstToMIR {
         let new_block = mir::BasicBlock::new(self.current_block + 1);
         self.get_current_function().blocks.push(new_block);
 
-        println!("current block: {}", self.current_block);
         self.current_block += 1;
         for stmt in block.stmts {
             self.visit_stmt(stmt);
@@ -342,7 +346,14 @@ mod tests {
 
         let mut ast_to_mir = AstToMIR::new(ctx);
         ast_to_mir.visit_module(module);
-        println!("{:#?}", ast_to_mir);
+
+        let mir_ctx = MIRCtx {
+            function_table: std::mem::take(&mut ast_to_mir.function_table),
+        };
+
+        for (_, func) in mir_ctx.function_table.iter() {
+            func.visualize(&mir_ctx, 0);
+        }
 
         assert!(false);
     }
