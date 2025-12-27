@@ -7,8 +7,30 @@ pub enum Value {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub struct StructField {
+    pub name: Symbol,
+    pub ty: Type,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct EnumField {
+    pub name: Symbol,
+    // enums can have associated data of N types, or just be single names
+    // NormalEnum :: { One, Two, Foo, Bar }
+    // ADTEnum :: { One(int), Two(int, int), Foo(T), Bar(T) }
+    pub adts: Vec<Type>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum UserDefinedType {
+    Struct(Vec<StructField>),
+    Enum(Vec<EnumField>),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Type {
     Int,
+    UserDef(Symbol),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -85,6 +107,11 @@ pub enum Decl {
         name: Symbol,
         ty: Option<Type>,
         expr: Expr,
+    },
+
+    TypeDef {
+        name: Symbol,
+        def: UserDefinedType,
     },
 
     Procedure {

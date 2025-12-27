@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
 
 use crate::ast::{
-    Block, Call, Decl, Expr, IfElse, Module, Params, Pat, Signature, Stmt, Type, Value,
+    Block, Call, Decl, EnumField, Expr, IfElse, Module, Params, Pat, Signature, Stmt, StructField,
+    Type, UserDefinedType, Value,
 };
 use crate::ctx::{Ctx, Symbol};
 use crate::lex::{BinOp, Keyword, Token};
@@ -285,6 +286,126 @@ fn parse_procedure(
     })
 }
 
+fn extract_typedef_fields(tokens: &mut VecDeque<Token>) -> ParseResult<Vec<VecDeque<Token>>> {
+    let mut fields = Vec::new();
+    expect_next(tokens, Token::LBrace)?;
+    while !tokens.is_empty() {
+        let mut field = VecDeque::new();
+        let mut in_parens = false;
+        loop {
+            if let Some(Token::Comma) = tokens.front() {
+                tokens.pop_front();
+                if !in_parens {
+                    break;
+                } else {
+                    field.push_back(Token::Comma);
+                }
+            } else if let Some(Token::RBrace) = tokens.front() {
+                break;
+            } else {
+                let token = tokens.pop_front().unwrap();
+                if token == Token::LParen {
+                    in_parens = true;
+                } else if token == Token::RParen {
+                    in_parens = false;
+                }
+                field.push_back(token);
+            }
+        }
+
+        fields.push(field);
+
+        if let Some(Token::RBrace) = tokens.front() {
+            break;
+        }
+    }
+    expect_next(tokens, Token::RBrace)?;
+
+    Ok(fields)
+}
+
+#[inline]
+fn is_struct(fields: &[VecDeque<Token>]) -> bool {
+    fields.iter().all(|f| f.contains(&Token::Colon))
+}
+
+fn parse_struct_fields(fields: Vec<VecDeque<Token>>) -> Vec<StructField> {
+    fields
+        .into_iter()
+        .map(|mut field_tokens| {
+            let name = expect_identifier(&mut field_tokens).unwrap();
+            let ty = parse_type_annot(&mut field_tokens)
+                .expect("to parse")
+                .expect("expected type annot on struct field");
+
+            StructField { name, ty }
+        })
+        .collect()
+}
+
+fn parse_enum_fields(fields: Vec<VecDeque<Token>>) -> Vec<EnumField> {
+    fields
+        .into_iter()
+        .map(|mut field_tokens| {
+            let name = expect_identifier(&mut field_tokens).unwrap();
+
+            let mut adts = Vec::new();
+            if let Some(Token::LParen) = field_tokens.front() {
+                field_tokens.pop_front();
+                loop {
+                    if let Some(Token::RParen) = field_tokens.front() {
+                        break;
+                    }
+
+                    if let Token::Keyword(Keyword::Int) = field_tokens.front().unwrap() {
+                        adts.push(Type::Int);
+                        field_tokens.pop_front();
+                    } else if let Some(Token::Identifier(type_name)) = field_tokens.front() {
+                        adts.push(Type::UserDef(*type_name));
+                        field_tokens.pop_front();
+                    } else {
+                        panic!("expected type name or int");
+                    }
+
+                    if let Some(Token::Comma) = field_tokens.front() {
+                        field_tokens.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+
+                field_tokens.pop_front();
+            }
+
+            EnumField { name, adts }
+        })
+        .collect()
+}
+
+fn parse_typedef(
+    name: Symbol,
+    // TOOD: verify that this type matches the parsed userdefinedtype
+    _ty: Option<Type>,
+    tokens: &mut VecDeque<Token>,
+) -> ParseResult<Decl> {
+    let fields = extract_typedef_fields(tokens)?;
+    println!("{fields:?}");
+
+    if is_struct(&fields) {
+        let struct_fields = parse_struct_fields(fields);
+        Ok(Decl::TypeDef {
+            name,
+            def: UserDefinedType::Struct(struct_fields),
+        })
+    } else {
+        let enum_fields = parse_enum_fields(fields);
+        Ok(Decl::TypeDef {
+            name,
+            def: UserDefinedType::Enum(enum_fields),
+        })
+    }
+}
+
 fn parse_decls(_ctx: &mut Ctx, tokens: &mut VecDeque<Token>) -> ParseResult<Vec<Decl>> {
     let mut decs = Vec::new();
     while !tokens.is_empty() {
@@ -298,6 +419,9 @@ fn parse_decls(_ctx: &mut Ctx, tokens: &mut VecDeque<Token>) -> ParseResult<Vec<
         match tokens.front() {
             Some(Token::LParen) => {
                 decs.push(parse_procedure(name, ty, tokens)?);
+            }
+            Some(Token::LBrace) => {
+                decs.push(parse_typedef(name, ty, tokens)?);
             }
             Some(_) => decs.push(Decl::Constant {
                 name,
@@ -324,7 +448,11 @@ pub fn parse(ctx: &mut Ctx, mut tokens: VecDeque<Token>) -> ParseResult<Module> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ctx::Symbol, lex};
+    use crate::{
+        ast::{StructField, UserDefinedType},
+        ctx::Symbol,
+        lex,
+    };
 
     fn tokenify(s: &str) -> (Ctx, VecDeque<Token>) {
         let mut ctx = Ctx::new();
@@ -632,5 +760,73 @@ mod tests {
                 },
             },
         )
+    }
+
+    #[test]
+    fn parse_type_struct() {
+        expect_decl(
+            "T :: { field1: int, field2: int }",
+            Decl::TypeDef {
+                name: Symbol(0),
+                def: (UserDefinedType::Struct(vec![
+                    StructField {
+                        name: Symbol(1),
+                        ty: Type::Int,
+                    },
+                    StructField {
+                        name: Symbol(2),
+                        ty: Type::Int,
+                    },
+                ])),
+            },
+        )
+    }
+
+    #[test]
+    fn parse_type_enum() {
+        expect_decl(
+            "Enum :: { X1, X2, X3 }",
+            Decl::TypeDef {
+                name: Symbol(0),
+                def: UserDefinedType::Enum(vec![
+                    EnumField {
+                        name: Symbol(1),
+                        adts: Vec::new(),
+                    },
+                    EnumField {
+                        name: Symbol(2),
+                        adts: Vec::new(),
+                    },
+                    EnumField {
+                        name: Symbol(3),
+                        adts: Vec::new(),
+                    },
+                ]),
+            },
+        );
+    }
+
+    #[test]
+    fn parse_type_enum_with_adts() {
+        expect_decl(
+            "Enum :: { X1(int), X2(int, int), X3(Enum) }",
+            Decl::TypeDef {
+                name: Symbol(0),
+                def: UserDefinedType::Enum(vec![
+                    EnumField {
+                        name: Symbol(1),
+                        adts: vec![Type::Int],
+                    },
+                    EnumField {
+                        name: Symbol(2),
+                        adts: vec![Type::Int, Type::Int],
+                    },
+                    EnumField {
+                        name: Symbol(3),
+                        adts: vec![Type::UserDef(Symbol(0))],
+                    },
+                ]),
+            },
+        );
     }
 }

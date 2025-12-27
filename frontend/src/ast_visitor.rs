@@ -261,6 +261,7 @@ impl AstVisitor for AstToMIR {
                 let rvalue = self.visit_expr(expr);
                 self.constants.insert(name, rvalue);
             }
+            Decl::TypeDef { name, def } => todo!(),
             Decl::Procedure {
                 name,
                 fn_ty,
@@ -391,7 +392,10 @@ mod tests {
 
         let expected_block = mir::BasicBlock {
             block_id: 1,
-            stmts: vec![mir::Statement::Assign(2, mir::RValue::Use(mir::Operand::Local(0)))],
+            stmts: vec![mir::Statement::Assign(
+                2,
+                mir::RValue::Use(mir::Operand::Local(0)),
+            )],
             terminator: mir::Terminator::BrIf(2, 2, 7),
         };
 
@@ -414,8 +418,8 @@ mod tests {
                 mir::RValue::BinOp(
                     lex::BinOp::Add,
                     mir::RValue::Use(mir::Operand::Local(0)).into(),
-                    mir::RValue::Use(mir::Operand::Constant(1)).into()
-                )
+                    mir::RValue::Use(mir::Operand::Constant(1)).into(),
+                ),
             )],
             terminator: mir::Terminator::Call {
                 function_id: 0,
@@ -451,8 +455,8 @@ mod tests {
                 mir::RValue::BinOp(
                     lex::BinOp::Add,
                     mir::RValue::Use(mir::Operand::Local(1)).into(),
-                    mir::RValue::Use(mir::Operand::Constant(1)).into()
-                )
+                    mir::RValue::Use(mir::Operand::Constant(1)).into(),
+                ),
             )],
             terminator: mir::Terminator::Call {
                 function_id: 0,
