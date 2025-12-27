@@ -29,8 +29,10 @@ pub enum UserDefinedType {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Type {
+    Unit,
     Int,
     UserDef(Symbol),
+    Fn(Box<Signature>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

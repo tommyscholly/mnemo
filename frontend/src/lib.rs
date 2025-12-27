@@ -5,6 +5,7 @@ mod macros;
 mod parse;
 mod mir;
 mod ast_visitor;
+mod typecheck;
 
 use crate::ctx::Ctx;
 use std::fs::File;
@@ -25,7 +26,9 @@ pub fn do_frontend(file: &str) {
         .map(|t| t.unwrap().0)
         .collect();
 
-    let module = parse::parse(&mut ctx, tokens).unwrap();
+    let mut module = parse::parse(&mut ctx, tokens).unwrap();
+
+    typecheck::typecheck(&mut module).unwrap();
 
     let mut ast_visitor = AstToMIR::new(ctx);
     ast_visitor.visit_module(module);

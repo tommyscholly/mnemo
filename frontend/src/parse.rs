@@ -369,8 +369,6 @@ fn parse_enum_fields(fields: Vec<VecDeque<Token>>) -> Vec<EnumField> {
 
                     if let Some(Token::Comma) = field_tokens.front() {
                         field_tokens.pop_front();
-                    } else {
-                        break;
                     }
                 }
 
