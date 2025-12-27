@@ -11,7 +11,7 @@ pub type LocalId = usize;
 pub type FunctionId = usize;
 pub type BlockId = usize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Ty {
     Bool,
     Char,
@@ -28,26 +28,26 @@ impl Display for Ty {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Operand {
     Constant(i32),
     Local(LocalId),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum RValue {
     Use(Operand),
     BinOp(BinOp, Box<RValue>, Box<RValue>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Statement {
     // This is in SSA form, so assigning defines a new local
     Assign(LocalId, RValue),
     Phi(LocalId, Vec<LocalId>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Terminator {
     Return,
     Br(BlockId),
@@ -61,7 +61,7 @@ pub enum Terminator {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct BasicBlock {
     pub block_id: BlockId,
     pub stmts: Vec<Statement>,
@@ -79,7 +79,7 @@ impl BasicBlock {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Local {
     pub id: LocalId,
     pub ty: Ty,
@@ -91,7 +91,7 @@ impl Local {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Function {
     pub function_id: FunctionId,
     pub blocks: Vec<BasicBlock>,

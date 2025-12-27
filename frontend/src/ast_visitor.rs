@@ -1,9 +1,8 @@
 use crate::ast::*;
 use crate::ctx::{Ctx, Symbol};
-use crate::mir::visualize::MIRVisualizer;
 use crate::mir::{self, Function};
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 fn ast_type_to_mir_type(ty: &Type) -> mir::Ty {
     match ty {
@@ -38,7 +37,7 @@ pub struct AstToMIR {
     symbol_table: HashMap<Symbol, mir::LocalId>,
     function_table: HashMap<Symbol, Function>,
     constants: HashMap<Symbol, mir::RValue>,
-    phi_functions_to_generate: HashMap<mir::LocalId, Vec<mir::LocalId>>,
+    phi_functions_to_generate: BTreeMap<mir::LocalId, Vec<mir::LocalId>>,
 }
 
 impl AstToMIR {
@@ -61,7 +60,7 @@ impl AstToMIR {
             symbol_table: HashMap::new(),
             function_table,
             constants: HashMap::new(),
-            phi_functions_to_generate: HashMap::new(),
+            phi_functions_to_generate: BTreeMap::new(),
         }
     }
 
@@ -329,32 +328,163 @@ mod tests {
         parse::parse(ctx, tokens).unwrap()
     }
 
-    #[test]
-    fn test_basic_module() {
-        let (mut ctx, tokens) = tokenify(
-            "foo :: (x: int, y: int): int { 
-                if x {
-                    x = x + 1
-                    println(x)
-                } else {
-                    y = y + 1
-                    println(y)
-                }
-            }",
-        );
+    const BASIC_MODULE_SRC: &str = "foo :: (x: int, y: int): int { \
+                if x {\
+                    x = x + 1\
+                    println(x)\
+                } else {\
+                    y = y + 1\
+                    println(y)\
+                }\
+            }";
+
+    fn build_basic_module_function() -> mir::Function {
+        let (mut ctx, tokens) = tokenify(BASIC_MODULE_SRC);
         let module = parseify(&mut ctx, tokens);
 
         let mut ast_to_mir = AstToMIR::new(ctx);
         ast_to_mir.visit_module(module);
 
-        let mir_ctx = MIRCtx {
+        let mut mir_ctx = MIRCtx {
             function_table: std::mem::take(&mut ast_to_mir.function_table),
         };
 
-        for (_, func) in mir_ctx.function_table.iter() {
-            func.visualize(&mir_ctx, 0);
-        }
+        mir_ctx.function_table.remove(&Symbol(0)).unwrap()
+    }
 
-        assert!(false);
+    #[test]
+    fn test_basic_module_locals() {
+        let func = build_basic_module_function();
+
+        assert_eq!(
+            func.locals,
+            vec![
+                mir::Local {
+                    id: 0,
+                    ty: mir::Ty::Int
+                },
+                mir::Local {
+                    id: 1,
+                    ty: mir::Ty::Int
+                },
+                mir::Local {
+                    id: 2,
+                    ty: mir::Ty::Int
+                },
+                mir::Local {
+                    id: 3,
+                    ty: mir::Ty::Int
+                },
+                mir::Local {
+                    id: 4,
+                    ty: mir::Ty::Int
+                },
+            ]
+        );
+        assert_eq!(func.function_id, 1);
+        assert_eq!(func.parameters, 2);
+    }
+
+    #[test]
+    fn test_basic_module_entry_block() {
+        let func = build_basic_module_function();
+
+        let expected_block = mir::BasicBlock {
+            block_id: 1,
+            stmts: vec![mir::Statement::Assign(2, mir::RValue::Use(mir::Operand::Local(0)))],
+            terminator: mir::Terminator::BrIf(2, 2, 7),
+        };
+
+        assert_eq!(func.blocks[0], expected_block);
+    }
+
+    #[test]
+    fn test_basic_module_then_blocks() {
+        let func = build_basic_module_function();
+
+        let expected_br_block = mir::BasicBlock {
+            block_id: 2,
+            stmts: vec![],
+            terminator: mir::Terminator::Br(3),
+        };
+        let expected_body_block = mir::BasicBlock {
+            block_id: 3,
+            stmts: vec![mir::Statement::Assign(
+                3,
+                mir::RValue::BinOp(
+                    lex::BinOp::Add,
+                    mir::RValue::Use(mir::Operand::Local(0)).into(),
+                    mir::RValue::Use(mir::Operand::Constant(1)).into()
+                )
+            )],
+            terminator: mir::Terminator::Call {
+                function_id: 0,
+                args: vec![mir::RValue::Use(mir::Operand::Local(0))],
+                destination: None,
+                target: 4,
+            },
+        };
+        let expected_return_block = mir::BasicBlock {
+            block_id: 4,
+            stmts: vec![],
+            terminator: mir::Terminator::Return,
+        };
+
+        assert_eq!(func.blocks[1], expected_br_block);
+        assert_eq!(func.blocks[2], expected_body_block);
+        assert_eq!(func.blocks[3], expected_return_block);
+    }
+
+    #[test]
+    fn test_basic_module_else_blocks() {
+        let func = build_basic_module_function();
+
+        let expected_br_block = mir::BasicBlock {
+            block_id: 5,
+            stmts: vec![],
+            terminator: mir::Terminator::Br(6),
+        };
+        let expected_body_block = mir::BasicBlock {
+            block_id: 6,
+            stmts: vec![mir::Statement::Assign(
+                4,
+                mir::RValue::BinOp(
+                    lex::BinOp::Add,
+                    mir::RValue::Use(mir::Operand::Local(1)).into(),
+                    mir::RValue::Use(mir::Operand::Constant(1)).into()
+                )
+            )],
+            terminator: mir::Terminator::Call {
+                function_id: 0,
+                args: vec![mir::RValue::Use(mir::Operand::Local(1))],
+                destination: None,
+                target: 7,
+            },
+        };
+        let expected_exit_block = mir::BasicBlock {
+            block_id: 7,
+            stmts: vec![],
+            terminator: mir::Terminator::Br(8),
+        };
+
+        assert_eq!(func.blocks[4], expected_br_block);
+        assert_eq!(func.blocks[5], expected_body_block);
+        assert_eq!(func.blocks[6], expected_exit_block);
+    }
+
+    #[test]
+    fn test_basic_module_join_block() {
+        let func = build_basic_module_function();
+
+        let expected_block = mir::BasicBlock {
+            block_id: 8,
+            stmts: vec![
+                mir::Statement::Phi(0, vec![3]),
+                mir::Statement::Phi(1, vec![4]),
+            ],
+            terminator: mir::Terminator::Return,
+        };
+
+        assert_eq!(func.blocks[7], expected_block);
     }
 }
