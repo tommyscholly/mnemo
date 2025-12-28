@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 
 use crate::ast::{
-    Block, Call, Decl, EnumField, Expr, IfElse, Module, Params, Pat, Signature, Stmt, StructField,
-    Type, UserDefinedType, Value,
+    AllocKind, Block, Call, Decl, EnumField, Expr, IfElse, Module, Params, Pat, Signature, Stmt,
+    StructField, Type, UserDefinedType, Value,
 };
 use crate::ctx::{Ctx, Symbol};
 use crate::lex::{BinOp, Keyword, Token};
@@ -18,6 +18,7 @@ pub enum ParseError {
 type ParseResult<T> = Result<T, ParseError>;
 
 fn expect_next(tokens: &mut VecDeque<Token>, token: Token) -> ParseResult<()> {
+    eprintln!("expecting {token:?} in {tokens:?}");
     if let Some(next) = tokens.pop_front()
         && next == token
     {
@@ -131,11 +132,64 @@ fn parse_primary(tokens: &mut VecDeque<Token>) -> ParseResult<Expr> {
     match tokens.pop_front() {
         Some(Token::Int(i)) => Ok(Expr::Value(Value::Int(i))),
         Some(Token::Identifier(name)) => parse_identifier(name, tokens),
+        Some(Token::LBracket) => {
+            let next_tok = tokens.pop_front().unwrap();
+            let alloc_kind = match next_tok {
+                Token::RBracket => AllocKind::DynArray,
+                Token::Int(i) => {
+                    expect_next(tokens, Token::RBracket)?;
+                    AllocKind::Array(i as usize)
+                }
+                _ => return Err(ParseError::Expression),
+            };
+
+            expect_next(tokens, Token::LBrace)?;
+            let mut exprs = Vec::new();
+            loop {
+                if let Some(Token::RBrace) = tokens.front() {
+                    expect_next(tokens, Token::RBrace)?;
+                    break;
+                }
+
+                exprs.push(parse_expr(tokens)?);
+
+                if let Some(Token::Comma) = tokens.front() {
+                    tokens.pop_front();
+                }
+            }
+
+            Ok(Expr::Allocation {
+                kind: alloc_kind,
+                elements: exprs,
+                region: None,
+            })
+        }
         Some(Token::LParen) => {
             let expr = parse_expr(tokens)?;
-            match tokens.pop_front() {
-                Some(Token::RParen) => Ok(expr),
-                _ => Err(ParseError::Expression),
+            if let Some(Token::Comma) = tokens.front() {
+                tokens.pop_front();
+                let mut exprs = vec![expr];
+                loop {
+                    if let Some(Token::RParen) = tokens.front() {
+                        expect_next(tokens, Token::RParen)?;
+                        break;
+                    }
+
+                    exprs.push(parse_expr(tokens)?);
+
+                    if let Some(Token::Comma) = tokens.front() {
+                        tokens.pop_front();
+                    }
+                }
+
+                Ok(Expr::Allocation {
+                    kind: AllocKind::Tuple,
+                    elements: exprs,
+                    region: None,
+                })
+            } else {
+                expect_next(tokens, Token::RParen)?;
+                Ok(expr)
             }
         }
         t => {
@@ -824,6 +878,94 @@ mod tests {
                         adts: vec![Type::UserDef(Symbol(0))],
                     },
                 ]),
+            },
+        );
+    }
+
+    #[test]
+    fn parse_array_and_dyn_array() {
+        expect_decl(
+            "foo :: () { 
+                x := [3]{1, 2, 3}
+                y := []{1, 2, 3}
+            }",
+            Decl::Procedure {
+                name: Symbol(0),
+                fn_ty: None,
+                sig: Signature {
+                    params: Params {
+                        patterns: vec![],
+                        types: vec![],
+                    },
+                    return_ty: None,
+                },
+                block: Block {
+                    stmts: vec![
+                        Stmt::ValDec {
+                            name: Symbol(1),
+                            ty: None,
+                            expr: Expr::Allocation {
+                                kind: AllocKind::Array(3),
+                                elements: vec![
+                                    Expr::Value(Value::Int(1)),
+                                    Expr::Value(Value::Int(2)),
+                                    Expr::Value(Value::Int(3)),
+                                ],
+                                region: None,
+                            },
+                        },
+                        Stmt::ValDec {
+                            name: Symbol(2),
+                            ty: None,
+                            expr: Expr::Allocation {
+                                kind: AllocKind::DynArray,
+                                elements: vec![
+                                    Expr::Value(Value::Int(1)),
+                                    Expr::Value(Value::Int(2)),
+                                    Expr::Value(Value::Int(3)),
+                                ],
+                                region: None,
+                            },
+                        },
+                    ],
+                    expr: None,
+                },
+            },
+        );
+    }
+
+    #[test]
+    fn parse_tuple() {
+        expect_decl(
+            "foo :: () { 
+                x := (1, 2, 3)
+            }",
+            Decl::Procedure {
+                name: Symbol(0),
+                fn_ty: None,
+                sig: Signature {
+                    params: Params {
+                        patterns: vec![],
+                        types: vec![],
+                    },
+                    return_ty: None,
+                },
+                block: Block {
+                    stmts: vec![Stmt::ValDec {
+                        name: Symbol(1),
+                        ty: None,
+                        expr: Expr::Allocation {
+                            kind: AllocKind::Tuple,
+                            elements: vec![
+                                Expr::Value(Value::Int(1)),
+                                Expr::Value(Value::Int(2)),
+                                Expr::Value(Value::Int(3)),
+                            ],
+                            region: None,
+                        },
+                    }],
+                    expr: None,
+                },
             },
         );
     }

@@ -53,6 +53,7 @@ pub struct IfElse {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum AllocKind {
     DynArray,
+    Array(usize),
     Tuple,
 }
 

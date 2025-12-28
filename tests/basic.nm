@@ -19,7 +19,13 @@ pattern_matching :: (x: ADT) -> int {
 bar :: () -> (fn(int) -> int) @ R 
   with R: region
 {
-  closure @ R := fn(x: int) = x + 5
+  closure := fn(x: int) = x + 5 @ R
+  // this is a heap allocated array of 5 ints
+  array := [4]{1, 2, 3, 4} @ R
+  // this is stack allocated, because it is not given a region to allocate in
+  stack_array := [2]{1, 2}
+  // this is a slice, which is dynamically sized
+  slice_array := [][1, 2, 3] @ R
 
   return closure
 }

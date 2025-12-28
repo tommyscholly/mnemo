@@ -55,11 +55,17 @@ pub enum Token {
     Int(i32),
     Colon,
     Eq,
+    /// (
     LParen,
+    /// )
     RParen,
+    /// {
     LBrace,
+    /// }
     RBrace,
+    /// [
     LBracket,
+    /// ]
     RBracket,
     Comma,
     SemiColon,
