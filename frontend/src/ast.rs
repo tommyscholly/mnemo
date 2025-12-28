@@ -33,6 +33,7 @@ pub enum Type {
     Int,
     UserDef(Symbol),
     Fn(Box<Signature>),
+    Alloc(AllocKind, Region),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -49,9 +50,29 @@ pub struct IfElse {
     pub else_: Option<Block>,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum AllocKind {
+    DynArray,
+    Tuple,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Region {
+    // need to track where a region originates from
+    Local,
+    Generic(Symbol),
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
     Value(Value),
+    Allocation {
+        kind: AllocKind,
+        // some allocations may not have elements, we just leave this empty
+        elements: Vec<Expr>,
+        // without a region, this is allocated in the function's implicit contextual region
+        region: Option<Region>,
+    },
     BinOp {
         op: BinOp,
         lhs: Box<Expr>,

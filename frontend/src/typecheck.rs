@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    ast::{self, Block, Call, Decl, Expr, IfElse, Module, Pat, Signature, Stmt, Type, Value},
+    ast::{
+        self, AllocKind, Block, Call, Decl, Expr, IfElse, Module, Pat, Signature, Stmt, Type, Value,
+    },
     ctx::Symbol,
 };
 
@@ -65,6 +67,13 @@ impl ResolveType for ast::Expr {
                     None => ast::Type::Unit,
                 }
             }
+            ast::Expr::Allocation { kind, region , elements} => {
+                // TODO: implement region handling
+                // regions should be resolved by the time we get here
+                let region_handle = region.unwrap();
+
+                Type::Alloc(*kind, region_handle)
+            }
         }
     }
 }
@@ -120,6 +129,8 @@ impl Typecheck for Expr {
                 Ok(())
             }
             Expr::Call(c) => type_check_call(c, ctx),
+
+            Expr::Allocation { kind, region, .. } => todo!()
         }
     }
 }

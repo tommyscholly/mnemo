@@ -136,6 +136,7 @@ impl AstVisitor for AstToMIR {
 
                 mir::RValue::Use(mir::Operand::Local(dest))
             }
+            Expr::Allocation { kind, elements, region } => todo!()
         }
     }
 
