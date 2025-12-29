@@ -23,9 +23,14 @@ impl MIRVisualizer for RValue {
                 rhs.visualize(indent);
             }
             RValue::Alloc(kind, ops) => {
-                print!("alloc {} (", kind);
-                ops.iter().for_each(|op| op.visualize(indent));
-                println!(")");
+                print!("alloc {} {{", kind);
+                for (i, op) in ops.iter().enumerate() {
+                    op.visualize(indent);
+                    if i != ops.len() - 1 {
+                        print!(", ");
+                    }
+                }
+                println!("}}");
             }
         }
     }
@@ -51,7 +56,7 @@ impl MIRVisualizer for Terminator {
                 target,
             } => {
                 let dest = destination.map_or("None".to_string(), |f| format!("{}", f));
-                print!("call {} (", function_id);
+                print!("call ${} (", function_id);
                 args.iter().for_each(|a| a.visualize(indent));
                 println!(") {} {}", dest, target)
             }
@@ -65,12 +70,12 @@ impl MIRVisualizer for Statement {
         print!("{tabs}");
         match self {
             Statement::Assign(local_id, expr) => {
-                print!("assign {} = ", local_id);
+                print!("%{} = ", local_id);
                 expr.visualize(indent);
                 println!()
             }
             Statement::Phi(local_id, ids) => {
-                println!("phi {} = {:?}", local_id, ids);
+                println!("phi %{} = {:?}", local_id, ids);
             }
         }
     }
@@ -80,7 +85,7 @@ impl MIRVisualizer for BasicBlock {
     fn visualize(&self, indent: usize) {
         let tabs = "\t".repeat(indent);
         print!("{tabs}");
-        println!("block {}:", self.block_id);
+        println!("bb {}:", self.block_id);
         for stmt in self.stmts.iter() {
             stmt.visualize(indent + 1);
         }
@@ -92,7 +97,7 @@ impl MIRVisualizer for Function {
     fn visualize(&self, indent: usize) {
         let tabs = "\t".repeat(indent);
         print!("{tabs}");
-        print!("fn {}(", self.function_id);
+        print!("fn ${}(", self.function_id);
         for (i, local) in self.locals.iter().enumerate().take(self.parameters) {
             print!("{}: {}", i, local.ty);
             if i != self.locals.len() - 1 {

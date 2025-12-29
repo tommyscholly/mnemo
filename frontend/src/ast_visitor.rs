@@ -174,10 +174,37 @@ impl AstVisitor for AstToMIR {
                 mir::RValue::Use(mir::Operand::Local(dest))
             }
             ExprKind::Allocation {
-                kind: _,
-                elements: _,
+                kind,
+                elements,
                 region: _,
-            } => todo!(),
+            } => {
+                let mut ops = Vec::new();
+                for elem in elements {
+                    let elem = self.visit_expr(elem);
+                    let op = match elem {
+                        mir::RValue::Use(op) => op,
+                        _ => {
+                            let elem_local = self.new_local(&TypeKind::Int);
+                            self.get_current_block()
+                                .stmts
+                                .push(mir::Statement::Assign(elem_local, elem));
+                            mir::Operand::Local(elem_local)
+                        }
+                    };
+                    ops.push(op);
+                }
+
+                match kind {
+                    AllocKind::Array(ty, _) => {
+                        let ty = ast_type_to_mir_type(&ty.node);
+                        mir::RValue::Alloc(mir::AllocKind::Array(ty), ops)
+                    }
+                    AllocKind::Tuple => mir::RValue::Alloc(mir::AllocKind::Tuple, ops),
+                    AllocKind::DynArray(_ty) => {
+                        todo!()
+                    }
+                }
+            }
         }
     }
 

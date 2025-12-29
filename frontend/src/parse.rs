@@ -78,7 +78,7 @@ fn parse_logical_or(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
     let mut left = parse_logical_and(tokens)?;
 
     while let Some(Token::BinOp(BinOp::Or)) = peek_token(tokens) {
-        let op_token = tokens.pop_front().unwrap();
+        let _op_token = tokens.pop_front().unwrap();
         let right = parse_logical_and(tokens)?;
         let span = left.span.merge(&right.span);
         left = Spanned::new(
@@ -98,7 +98,7 @@ fn parse_logical_and(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
     let mut left = parse_comparison(tokens)?;
 
     while let Some(Token::BinOp(BinOp::And)) = peek_token(tokens) {
-        let op_token = tokens.pop_front().unwrap();
+        let _op_token = tokens.pop_front().unwrap();
         let right = parse_comparison(tokens)?;
         let span = left.span.merge(&right.span);
         left = Spanned::new(
@@ -227,7 +227,7 @@ fn parse_identifier_expr(
         }
 
         let rparen_span = expect_next(tokens, Token::RParen)?;
-        let span = ident.span.merge(&rparen_span);
+        let span = ident.span.merge(&lparen_span).merge(&rparen_span);
 
         return Ok(Spanned::new(
             ExprKind::Call(Call {
@@ -333,9 +333,7 @@ fn parse_primary(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
                     span,
                 ))
             } else {
-                let end_span = expect_next(tokens, Token::RParen)?;
-                // For grouped expressions, keep the inner expression's span
-                // but we could also merge with parens if desired
+                let _ = expect_next(tokens, Token::RParen)?;
                 Ok(expr)
             }
         }
@@ -400,7 +398,7 @@ fn parse_proc_sig(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Signature>
 fn parse_type_annot(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Option<Type>> {
     let Some(Spanned {
         node: Token::Colon,
-        span: colon_span,
+        span: _,
     }) = tokens.pop_front()
     else {
         return Err(ParseError::new(ParseErrorKind::ExpectedType, 0..0));
@@ -463,19 +461,19 @@ fn parse_stmt(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
             let name = expect_identifier(tokens)?;
             let start_span = name.span.clone();
 
-            let stmt_kind = match peek_token(tokens) {
+            match peek_token(tokens) {
                 Some(Token::Colon) => {
                     let ty = parse_type_annot(tokens)?;
                     expect_next(tokens, Token::Eq)?;
                     let expr = parse_expr(tokens)?;
                     let span = start_span.merge(&expr.span);
-                    return Ok(Spanned::new(StmtKind::ValDec { name, ty, expr }, span));
+                    Ok(Spanned::new(StmtKind::ValDec { name, ty, expr }, span))
                 }
                 Some(Token::Eq) => {
                     expect_next(tokens, Token::Eq)?;
                     let expr = parse_expr(tokens)?;
                     let span = start_span.merge(&expr.span);
-                    return Ok(Spanned::new(StmtKind::Assign { name, expr }, span));
+                    Ok(Spanned::new(StmtKind::Assign { name, expr }, span))
                 }
                 Some(Token::LParen) => {
                     let expr = parse_identifier_expr(name.clone(), tokens)?;
@@ -483,15 +481,13 @@ fn parse_stmt(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
                         unreachable!()
                     };
                     let span = expr.span;
-                    return Ok(Spanned::new(StmtKind::Call(call), span));
+                    Ok(Spanned::new(StmtKind::Call(call), span))
                 }
-                _ => {
-                    return Err(ParseError::new(
-                        ParseErrorKind::ExpectedExpression,
-                        peek_span(tokens).unwrap_or(start_span),
-                    ));
-                }
-            };
+                _ => Err(ParseError::new(
+                    ParseErrorKind::ExpectedExpression,
+                    peek_span(tokens).unwrap_or(start_span),
+                )),
+            }
         }
     }
 }
