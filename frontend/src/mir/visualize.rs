@@ -1,11 +1,11 @@
-use crate::{ast_visitor::MIRCtx, mir::*};
+use crate::mir::*;
 
 pub trait MIRVisualizer {
-    fn visualize(&self, ctx: &MIRCtx, indent: usize);
+    fn visualize(&self, indent: usize);
 }
 
 impl MIRVisualizer for Operand {
-    fn visualize(&self, _ctx: &MIRCtx, _indent: usize) {
+    fn visualize(&self, indent: usize) {
         match self {
             Operand::Local(local_id) => print!("%{local_id}"),
             Operand::Constant(i) => print!("{i}"),
@@ -14,20 +14,25 @@ impl MIRVisualizer for Operand {
 }
 
 impl MIRVisualizer for RValue {
-    fn visualize(&self, ctx: &MIRCtx, indent: usize) {
+    fn visualize(&self, indent: usize) {
         match self {
-            RValue::Use(op) => op.visualize(ctx, indent),
+            RValue::Use(op) => op.visualize(indent),
             RValue::BinOp(op, lhs, rhs) => {
-                lhs.visualize(ctx, indent);
+                lhs.visualize(indent);
                 print!(" {op} ");
-                rhs.visualize(ctx, indent);
+                rhs.visualize(indent);
+            }
+            RValue::Alloc(kind, ops) => {
+                print!("alloc {} (", kind);
+                ops.iter().for_each(|op| op.visualize(indent));
+                println!(")");
             }
         }
     }
 }
 
 impl MIRVisualizer for Terminator {
-    fn visualize(&self, ctx: &MIRCtx, indent: usize) {
+    fn visualize(&self, indent: usize) {
         let tabs = "\t".repeat(indent);
         print!("{tabs}");
         match self {
@@ -47,7 +52,7 @@ impl MIRVisualizer for Terminator {
             } => {
                 let dest = destination.map_or("None".to_string(), |f| format!("{}", f));
                 print!("call {} (", function_id);
-                args.iter().for_each(|a| a.visualize(ctx, indent));
+                args.iter().for_each(|a| a.visualize(indent));
                 println!(") {} {}", dest, target)
             }
         }
@@ -55,13 +60,13 @@ impl MIRVisualizer for Terminator {
 }
 
 impl MIRVisualizer for Statement {
-    fn visualize(&self, ctx: &MIRCtx, indent: usize) {
+    fn visualize(&self, indent: usize) {
         let tabs = "\t".repeat(indent);
         print!("{tabs}");
         match self {
             Statement::Assign(local_id, expr) => {
                 print!("assign {} = ", local_id);
-                expr.visualize(ctx, indent);
+                expr.visualize(indent);
                 println!()
             }
             Statement::Phi(local_id, ids) => {
@@ -72,23 +77,23 @@ impl MIRVisualizer for Statement {
 }
 
 impl MIRVisualizer for BasicBlock {
-    fn visualize(&self, ctx: &MIRCtx, indent: usize) {
+    fn visualize(&self, indent: usize) {
         let tabs = "\t".repeat(indent);
         print!("{tabs}");
         println!("block {}:", self.block_id);
         for stmt in self.stmts.iter() {
-            stmt.visualize(ctx, indent + 1);
+            stmt.visualize(indent + 1);
         }
-        self.terminator.visualize(ctx, indent + 1);
+        self.terminator.visualize(indent + 1);
     }
 }
 
 impl MIRVisualizer for Function {
-    fn visualize(&self, ctx: &MIRCtx, indent: usize) {
+    fn visualize(&self, indent: usize) {
         let tabs = "\t".repeat(indent);
         print!("{tabs}");
         print!("fn {}(", self.function_id);
-        for (i, local) in self.locals.iter().enumerate() {
+        for (i, local) in self.locals.iter().enumerate().take(self.parameters) {
             print!("{}: {}", i, local.ty);
             if i != self.locals.len() - 1 {
                 print!(", ");
@@ -97,7 +102,22 @@ impl MIRVisualizer for Function {
         println!("):");
 
         for block in self.blocks.iter() {
-            block.visualize(ctx, indent + 1);
+            block.visualize(indent + 1);
+        }
+    }
+}
+
+impl MIRVisualizer for Module {
+    fn visualize(&self, indent: usize) {
+        println!("module:");
+        for constant in self.constants.iter() {
+            print!("constant: ");
+            constant.visualize(indent + 1);
+            println!();
+        }
+
+        for function in self.functions.iter() {
+            function.visualize(indent + 1);
         }
     }
 }

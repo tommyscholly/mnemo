@@ -1,20 +1,24 @@
-use crate::{ctx::Symbol, lex::BinOp};
+use crate::ctx::Symbol;
+use crate::lex::BinOp;
+use crate::span::{DUMMY_SPAN, Spanned};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Value {
+pub enum ValueKind {
     Int(i32),
     Ident(Symbol),
 }
 
+pub type Value = Spanned<ValueKind>;
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct StructField {
-    pub name: Symbol,
+    pub name: Spanned<Symbol>,
     pub ty: Type,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct EnumField {
-    pub name: Symbol,
+    pub name: Spanned<Symbol>,
     // enums can have associated data of N types, or just be single names
     // NormalEnum :: { One, Two, Foo, Bar }
     // ADTEnum :: { One(int), Two(int, int), Foo(T), Bar(T) }
@@ -28,32 +32,28 @@ pub enum UserDefinedType {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Type {
+pub enum TypeKind {
     Unit,
     Int,
+    Bool,
     UserDef(Symbol),
-    Fn(Box<Signature>),
+    Fn(Box<SignatureInner>),
     Alloc(AllocKind, Region),
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Call {
-    pub callee: Symbol,
-    pub args: Vec<Expr>,
+pub type Type = Spanned<TypeKind>;
+
+impl Type {
+    /// Create an unspanned type (for synthesized/inferred types).
+    pub fn synthetic(kind: TypeKind) -> Self {
+        Spanned::new(kind, DUMMY_SPAN)
+    }
 }
 
-// possibly make this both a statement and an expression
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct IfElse {
-    pub cond: Expr,
-    pub then: Block,
-    pub else_: Option<Block>,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum AllocKind {
-    DynArray,
-    Array(usize),
+    DynArray(Box<Type>),
+    Array(Box<Type>, usize),
     Tuple,
 }
 
@@ -65,8 +65,14 @@ pub enum Region {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Expr {
-    Value(Value),
+pub struct Call {
+    pub callee: Spanned<Symbol>,
+    pub args: Vec<Expr>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ExprKind {
+    Value(ValueKind),
     Allocation {
         kind: AllocKind,
         // some allocations may not have elements, we just leave this empty
@@ -83,10 +89,14 @@ pub enum Expr {
     Call(Call),
 }
 
+pub type Expr = Spanned<ExprKind>;
+
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Pat {
+pub enum PatKind {
     Symbol(Symbol),
 }
+
+pub type Pat = Spanned<PatKind>;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Params {
@@ -94,15 +104,23 @@ pub struct Params {
     pub types: Vec<Type>,
 }
 
+// possibly make this both a statement and an expression
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Stmt {
+pub struct IfElse {
+    pub cond: Expr,
+    pub then: Block,
+    pub else_: Option<Block>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum StmtKind {
     ValDec {
-        name: Symbol,
+        name: Spanned<Symbol>,
         ty: Option<Type>,
         expr: Expr,
     },
     Assign {
-        name: Symbol,
+        name: Spanned<Symbol>,
         expr: Expr,
     },
     // a function call with no assignment
@@ -110,42 +128,50 @@ pub enum Stmt {
     IfElse(IfElse),
 }
 
+pub type Stmt = Spanned<StmtKind>;
+
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Block {
+pub struct BlockInner {
     pub stmts: Vec<Stmt>,
-    // optional return
+    // optional return expression
     pub expr: Option<Expr>,
 }
 
+pub type Block = Spanned<BlockInner>;
+
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Signature {
+pub struct SignatureInner {
     pub params: Params,
     pub return_ty: Option<Type>,
     // TODO: add effect with handling here
 }
 
+pub type Signature = Spanned<SignatureInner>;
+
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Decl {
+pub enum DeclKind {
     // name :: int
     Constant {
-        name: Symbol,
+        name: Spanned<Symbol>,
         ty: Option<Type>,
         expr: Expr,
     },
 
     TypeDef {
-        name: Symbol,
+        name: Spanned<Symbol>,
         def: UserDefinedType,
     },
 
     Procedure {
-        name: Symbol,
+        name: Spanned<Symbol>,
         // TODO: implement fn_tys
         fn_ty: Option<Type>,
         sig: Signature,
         block: Block,
     },
 }
+
+pub type Decl = Spanned<DeclKind>;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Module {

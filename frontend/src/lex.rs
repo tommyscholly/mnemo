@@ -1,10 +1,8 @@
 use crate::ctx::{Ctx, Symbol};
+use crate::span::{Span, Spanned};
 use crate::{advance_single_token, handle_operator};
 use std::fmt::Display;
 use std::iter::Peekable;
-
-pub type Span = std::ops::Range<usize>;
-pub type Spanned<T> = (T, Span);
 
 #[derive(Debug)]
 pub enum LexErrorKind {
@@ -71,6 +69,7 @@ pub enum Token {
     SemiColon,
     Arrow,
     At,
+    Dot,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -203,6 +202,9 @@ impl<'a, T: Iterator<Item = LexItem>> Lexer<'a, T> {
                 ',' => {
                     advance_single_token!(self, Token::Comma)
                 }
+                '.' => {
+                    advance_single_token!(self, Token::Dot)
+                }
                 '=' => {
                     handle_operator!(self, '=', '=', Token::Eq, Token::BinOp(BinOp::EqEq))
                 }
@@ -273,7 +275,7 @@ impl<'a, T: Iterator<Item = LexItem>> Lexer<'a, T> {
             }
         }
 
-        Ok((
+        Ok(Spanned::new(
             Token::Int(number.parse().unwrap()),
             self.start..self.current,
         ))
@@ -292,10 +294,10 @@ impl<'a, T: Iterator<Item = LexItem>> Lexer<'a, T> {
         }
 
         match Keyword::try_from(kw_var.as_str()) {
-            Ok(kw) => Ok((Token::Keyword(kw), self.start..self.current)),
+            Ok(kw) => Ok(Spanned::new(Token::Keyword(kw), self.start..self.current)),
             Err(_) => match BinOp::try_from(kw_var.as_str()) {
-                Ok(op) => Ok((Token::BinOp(op), self.start..self.current)),
-                Err(_) => Ok((
+                Ok(op) => Ok(Spanned::new(Token::BinOp(op), self.start..self.current)),
+                Err(_) => Ok(Spanned::new(
                     Token::Identifier(self.ctx.intern(&kw_var)),
                     self.start..self.current,
                 )),

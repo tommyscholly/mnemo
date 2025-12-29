@@ -1,12 +1,11 @@
-
 #[macro_export]
 macro_rules! advance_single_token {
     ($self:expr, $token_type:expr) => {{
         $self.chars.next();
         $self.current += 1;
-        let token = ($token_type, $self.start..$self.current);
+        let span = $self.start..$self.current;
         $self.start = $self.current;
-        return Ok(token);
+        return Ok($crate::span::Spanned::new($token_type, span));
     }};
 }
 
@@ -23,11 +22,11 @@ macro_rules! handle_operator {
             
             let span = $self.start..$self.current;
             $self.start = $self.current;
-            return Ok(($double_token, span));
+            return Ok($crate::span::Spanned::new($double_token, span));
         } else {
             let span = $self.start..$self.current;
             $self.start = $self.current;
-            return Ok(($single_token, span));
+            return Ok($crate::span::Spanned::new($single_token, span));
         }
     }};
 }

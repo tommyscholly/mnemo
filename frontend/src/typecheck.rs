@@ -4,37 +4,68 @@ use std::collections::HashMap;
 
 use crate::{
     ast::{
-        self, AllocKind, Block, Call, Decl, Expr, IfElse, Module, Pat, Signature, Stmt, Type, Value,
+        self, AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Module,
+        Params, Pat, PatKind, Region, Signature, SignatureInner, Stmt, StmtKind, Type, TypeKind,
+        ValueKind,
     },
     ctx::Symbol,
+    span::{DUMMY_SPAN, Span, Spanned},
 };
 
 #[derive(Debug)]
-pub enum TypeError {
+pub struct TypeError {
+    pub kind: TypeErrorKind,
+    pub span: Span,
+}
+
+impl TypeError {
+    fn new(kind: TypeErrorKind, span: Span) -> Self {
+        Self { kind, span }
+    }
+}
+
+#[derive(Debug)]
+pub enum TypeErrorKind {
     ExpectedType {
-        expected: ast::Type,
-        found: ast::Type,
-        symbol: Symbol,
+        expected: TypeKind,
+        found: TypeKind,
     },
-    FnTypeExpected(Symbol),
+    FnTypeExpected,
     SignatureMismatch {
-        expected: Box<ast::Signature>,
-        found: Box<ast::Signature>,
-        symbol: Symbol,
+        expected: Box<SignatureInner>,
+        found: Box<SignatureInner>,
     },
     UnknownSymbol(Symbol),
 }
 
 pub struct TypecheckCtx {
-    type_map: HashMap<Symbol, ast::Type>,
-    function_sigs: HashMap<Symbol, ast::Signature>,
+    type_map: HashMap<Symbol, Type>,
+    function_sigs: HashMap<Symbol, Signature>,
 }
 
 impl TypecheckCtx {
     fn new() -> Self {
+        let mut function_sigs = HashMap::new();
+
+        // Register built-in functions
+        // println takes one int argument and returns unit
+        function_sigs.insert(
+            Symbol(-1), // println
+            Spanned::new(
+                SignatureInner {
+                    params: Params {
+                        patterns: vec![Spanned::new(PatKind::Symbol(Symbol(-100)), DUMMY_SPAN)],
+                        types: vec![Type::synthetic(TypeKind::Int)],
+                    },
+                    return_ty: None,
+                },
+                DUMMY_SPAN,
+            ),
+        );
+
         Self {
             type_map: HashMap::new(),
-            function_sigs: HashMap::new(),
+            function_sigs,
         }
     }
 }
@@ -42,37 +73,40 @@ impl TypecheckCtx {
 pub type TypecheckResult<T> = Result<T, TypeError>;
 
 trait ResolveType {
-    fn resolve_type(&self, ctx: &TypecheckCtx) -> ast::Type;
+    fn resolve_type(&self, ctx: &TypecheckCtx) -> Type;
 }
 
-impl ResolveType for ast::Expr {
-    fn resolve_type(&self, ctx: &TypecheckCtx) -> ast::Type {
-        match self {
-            ast::Expr::Value(v) => match v {
-                Value::Int(_) => ast::Type::Int,
-                Value::Ident(i) => ctx.type_map.get(i).unwrap().clone(),
+impl ResolveType for Expr {
+    fn resolve_type(&self, ctx: &TypecheckCtx) -> Type {
+        match &self.node {
+            ExprKind::Value(v) => match v {
+                ValueKind::Int(_) => Type::synthetic(TypeKind::Int),
+                ValueKind::Ident(i) => ctx.type_map.get(i).unwrap().clone(),
             },
-            ast::Expr::BinOp { lhs, rhs, .. } => {
-                let lhs = lhs.resolve_type(ctx);
-                let rhs = rhs.resolve_type(ctx);
-                if lhs != rhs {
+            ExprKind::BinOp { lhs, rhs, .. } => {
+                let lhs_ty = lhs.resolve_type(ctx);
+                let rhs_ty = rhs.resolve_type(ctx);
+                if lhs_ty.node != rhs_ty.node {
                     panic!("expected types to be equal");
                 }
-                lhs
+                lhs_ty
             }
-            ast::Expr::Call(Call { callee, args: _ }) => {
-                let callee_sig = ctx.function_sigs.get(callee).unwrap();
-                match callee_sig.return_ty.clone() {
+            ExprKind::Call(Call { callee, args: _ }) => {
+                let callee_sig = ctx.function_sigs.get(&callee.node).unwrap();
+                match callee_sig.node.return_ty.clone() {
                     Some(ty) => ty,
-                    None => ast::Type::Unit,
+                    None => Type::synthetic(TypeKind::Unit),
                 }
             }
-            ast::Expr::Allocation { kind, region , elements} => {
+            ExprKind::Allocation {
+                kind,
+                region,
+                elements,
+            } => {
                 // TODO: implement region handling
                 // regions should be resolved by the time we get here
-                let region_handle = region.unwrap();
-
-                Type::Alloc(*kind, region_handle)
+                let region_handle = region.unwrap_or(Region::Local);
+                Type::synthetic(TypeKind::Alloc(kind.clone(), region_handle))
             }
         }
     }
@@ -84,8 +118,11 @@ trait Typecheck {
 }
 
 fn type_check_call(call: &mut Call, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-    let Some(callee_sig) = ctx.function_sigs.get(&call.callee) else {
-        return Err(TypeError::UnknownSymbol(call.callee));
+    let Some(callee_sig) = ctx.function_sigs.get(&call.callee.node) else {
+        return Err(TypeError::new(
+            TypeErrorKind::UnknownSymbol(call.callee.node),
+            call.callee.span.clone(),
+        ));
     };
 
     // drop ctx &mut borrow here
@@ -95,13 +132,20 @@ fn type_check_call(call: &mut Call, ctx: &mut TypecheckCtx) -> TypecheckResult<(
         arg.typecheck(ctx)?;
     }
 
-    for (arg, ty) in call.args.iter().zip(callee_signature.params.types.iter()) {
-        if *ty != arg.resolve_type(ctx) {
-            return Err(TypeError::ExpectedType {
-                expected: ty.clone(),
-                found: arg.resolve_type(ctx),
-                symbol: call.callee,
-            });
+    for (arg, ty) in call
+        .args
+        .iter()
+        .zip(callee_signature.node.params.types.iter())
+    {
+        let arg_ty = arg.resolve_type(ctx);
+        if ty.node != arg_ty.node {
+            return Err(TypeError::new(
+                TypeErrorKind::ExpectedType {
+                    expected: ty.node.clone(),
+                    found: arg_ty.node,
+                },
+                arg.span.clone(),
+            ));
         }
     }
 
@@ -111,64 +155,79 @@ fn type_check_call(call: &mut Call, ctx: &mut TypecheckCtx) -> TypecheckResult<(
 impl Typecheck for Expr {
     #[allow(clippy::only_used_in_recursion)]
     fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-        match self {
-            Expr::Value(v) => match v {
-                Value::Int(_) => Ok(()),
-                Value::Ident(i) => {
-                    let _ = ctx
-                        .type_map
-                        .get(i)
-                        .map_or_else(|| Err(TypeError::UnknownSymbol(*i)), |ty| Ok(ty.clone()));
-
+        match &mut self.node {
+            ExprKind::Value(v) => match v {
+                ValueKind::Int(_) => Ok(()),
+                ValueKind::Ident(i) => {
+                    if !ctx.type_map.contains_key(i) {
+                        return Err(TypeError::new(
+                            TypeErrorKind::UnknownSymbol(*i),
+                            self.span.clone(),
+                        ));
+                    }
                     Ok(())
                 }
             },
-            Expr::BinOp { lhs, rhs, .. } => {
+            ExprKind::BinOp { lhs, rhs, .. } => {
                 lhs.typecheck(ctx)?;
                 rhs.typecheck(ctx)?;
                 Ok(())
             }
-            Expr::Call(c) => type_check_call(c, ctx),
-
-            Expr::Allocation { kind, region, .. } => todo!()
+            ExprKind::Call(c) => type_check_call(c, ctx),
+            ExprKind::Allocation { elements, .. } => {
+                for e in elements {
+                    e.typecheck(ctx)?;
+                }
+                Ok(())
+            }
         }
     }
 }
 
 impl Typecheck for Stmt {
     fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-        match self {
-            Stmt::ValDec { name, ty, expr } => {
+        match &mut self.node {
+            StmtKind::ValDec { name, ty, expr } => {
                 expr.typecheck(ctx)?;
-                if let Some(ty) = ty {
-                    if *ty != expr.resolve_type(ctx) {
-                        return Err(TypeError::ExpectedType {
-                            expected: ty.clone(),
-                            found: expr.resolve_type(ctx),
-                            symbol: *name,
-                        });
+                let expr_ty = expr.resolve_type(ctx);
+
+                if let Some(declared_ty) = ty {
+                    if declared_ty.node != expr_ty.node {
+                        return Err(TypeError::new(
+                            TypeErrorKind::ExpectedType {
+                                expected: declared_ty.node.clone(),
+                                found: expr_ty.node,
+                            },
+                            expr.span.clone(),
+                        ));
                     }
                 } else {
-                    *ty = Some(expr.resolve_type(ctx));
+                    *ty = Some(expr_ty.clone());
                 }
-                ctx.type_map.insert(*name, expr.resolve_type(ctx));
+                ctx.type_map.insert(name.node, expr_ty);
             }
-            Stmt::Assign { name, expr } => {
+            StmtKind::Assign { name, expr } => {
                 expr.typecheck(ctx)?;
-                let ty = expr.resolve_type(ctx);
-                let Some(expected_type) = ctx.type_map.get(name) else {
-                    return Err(TypeError::UnknownSymbol(*name));
+                let expr_ty = expr.resolve_type(ctx);
+
+                let Some(expected_type) = ctx.type_map.get(&name.node) else {
+                    return Err(TypeError::new(
+                        TypeErrorKind::UnknownSymbol(name.node),
+                        name.span.clone(),
+                    ));
                 };
 
-                if *expected_type != ty {
-                    return Err(TypeError::ExpectedType {
-                        expected: expected_type.clone(),
-                        found: ty,
-                        symbol: *name,
-                    });
+                if expected_type.node != expr_ty.node {
+                    return Err(TypeError::new(
+                        TypeErrorKind::ExpectedType {
+                            expected: expected_type.node.clone(),
+                            found: expr_ty.node,
+                        },
+                        expr.span.clone(),
+                    ));
                 }
             }
-            Stmt::IfElse(IfElse { cond, then, else_ }) => {
+            StmtKind::IfElse(IfElse { cond, then, else_ }) => {
                 // TODO: check that cond is a bool, right now we only have ints
                 cond.typecheck(ctx)?;
                 then.typecheck(ctx)?;
@@ -176,7 +235,7 @@ impl Typecheck for Stmt {
                     else_.typecheck(ctx)?;
                 }
             }
-            Stmt::Call(c) => type_check_call(c, ctx)?,
+            StmtKind::Call(c) => type_check_call(c, ctx)?,
         }
 
         Ok(())
@@ -185,7 +244,7 @@ impl Typecheck for Stmt {
 
 impl Typecheck for Block {
     fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-        for stmt in self.stmts.iter_mut() {
+        for stmt in self.node.stmts.iter_mut() {
             stmt.typecheck(ctx)?;
         }
 
@@ -195,52 +254,66 @@ impl Typecheck for Block {
 
 impl Typecheck for Decl {
     fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-        match self {
-            Decl::Constant { name, ty, expr } => {
+        match &mut self.node {
+            DeclKind::Constant { name, ty, expr } => {
                 expr.typecheck(ctx)?;
-                if let Some(ty) = ty {
-                    if *ty != expr.resolve_type(ctx) {
-                        return Err(TypeError::ExpectedType {
-                            expected: ty.clone(),
-                            found: expr.resolve_type(ctx),
-                            symbol: *name,
-                        });
+                let expr_ty = expr.resolve_type(ctx);
+
+                if let Some(declared_ty) = ty {
+                    if declared_ty.node != expr_ty.node {
+                        return Err(TypeError::new(
+                            TypeErrorKind::ExpectedType {
+                                expected: declared_ty.node.clone(),
+                                found: expr_ty.node,
+                            },
+                            expr.span.clone(),
+                        ));
                     }
                 } else {
-                    *ty = Some(expr.resolve_type(ctx));
+                    *ty = Some(expr_ty);
                 }
             }
-            Decl::TypeDef { name: _, def: _ } => {}
-            Decl::Procedure {
+            DeclKind::TypeDef { name: _, def: _ } => {}
+            DeclKind::Procedure {
                 name,
                 fn_ty,
                 sig,
                 block,
             } => {
-                if let Some(fn_ty) = fn_ty {
-                    let Type::Fn(fn_sig) = fn_ty else {
-                        return Err(TypeError::FnTypeExpected(*name));
+                if let Some(declared_fn_ty) = fn_ty {
+                    let TypeKind::Fn(fn_sig) = &declared_fn_ty.node else {
+                        return Err(TypeError::new(
+                            TypeErrorKind::FnTypeExpected,
+                            declared_fn_ty.span.clone(),
+                        ));
                     };
 
-                    if *sig != **fn_sig {
-                        return Err(TypeError::SignatureMismatch {
-                            expected: fn_sig.clone(),
-                            found: sig.clone().into(),
-                            symbol: *name,
-                        });
+                    if sig.node != **fn_sig {
+                        return Err(TypeError::new(
+                            TypeErrorKind::SignatureMismatch {
+                                expected: fn_sig.clone(),
+                                found: Box::new(sig.node.clone()),
+                            },
+                            sig.span.clone(),
+                        ));
                     }
                 } else {
-                    *fn_ty = Some(Type::Fn(sig.clone().into()));
+                    *fn_ty = Some(Type::synthetic(TypeKind::Fn(Box::new(sig.node.clone()))));
                 }
 
-                for (pat, ty) in sig.params.patterns.iter().zip(sig.params.types.iter()) {
-                    #[allow(irrefutable_let_patterns)]
-                    if let Pat::Symbol(name) = pat {
-                        ctx.type_map.insert(*name, ty.clone());
+                for (pat, ty) in sig
+                    .node
+                    .params
+                    .patterns
+                    .iter()
+                    .zip(sig.node.params.types.iter())
+                {
+                    if let PatKind::Symbol(sym) = pat.node {
+                        ctx.type_map.insert(sym, ty.clone());
                     }
                 }
 
-                ctx.function_sigs.insert(*name, sig.clone());
+                ctx.function_sigs.insert(name.node, sig.clone());
                 block.typecheck(ctx)?;
             }
         }
@@ -269,21 +342,21 @@ mod tests {
     use std::collections::VecDeque;
 
     use crate::{
-        ast::Pat,
+        ast::{Pat, PatKind, TypeKind},
         ctx::Ctx,
-        lex::{self, Token},
-        parse,
+        lex, parse,
+        span::Spanned,
     };
 
     use super::*;
 
-    fn tokenify(s: &str) -> (Ctx, VecDeque<Token>) {
+    fn tokenify(s: &str) -> (Ctx, VecDeque<Spanned<crate::lex::Token>>) {
         let mut ctx = Ctx::new();
-        let tokens = lex::tokenize(&mut ctx, s).map(|t| t.unwrap().0).collect();
+        let tokens = lex::tokenize(&mut ctx, s).map(|t| t.unwrap()).collect();
         (ctx, tokens)
     }
 
-    fn parseify(ctx: &mut Ctx, tokens: VecDeque<Token>) -> Module {
+    fn parseify(ctx: &mut Ctx, tokens: VecDeque<Spanned<crate::lex::Token>>) -> Module {
         parse::parse(ctx, tokens).unwrap()
     }
 
@@ -308,15 +381,15 @@ mod tests {
         assert!(result.is_ok());
 
         let module = result.unwrap();
-        let Decl::Procedure { block, .. } = &module.declarations[0] else {
+        let DeclKind::Procedure { block, .. } = &module.declarations[0].node else {
             panic!("expected procedure");
         };
 
-        let Stmt::ValDec { ty, .. } = &block.stmts[0] else {
+        let StmtKind::ValDec { ty, .. } = &block.node.stmts[0].node else {
             panic!("expected val dec");
         };
 
-        assert_eq!(*ty, Some(Type::Int));
+        assert_eq!(ty.as_ref().map(|t| &t.node), Some(&TypeKind::Int));
     }
 
     #[test]
@@ -347,11 +420,11 @@ mod tests {
         assert!(result.is_ok());
 
         let module = result.unwrap();
-        let Decl::Constant { ty, .. } = &module.declarations[0] else {
+        let DeclKind::Constant { ty, .. } = &module.declarations[0].node else {
             panic!("expected constant");
         };
 
-        assert_eq!(*ty, Some(Type::Int));
+        assert_eq!(ty.as_ref().map(|t| &t.node), Some(&TypeKind::Int));
     }
 
     #[test]
@@ -370,20 +443,20 @@ mod tests {
 
     #[test]
     fn test_typecheck_error_unknown_symbol_in_ident() {
-        // Note: Currently resolve_type panics on unknown symbols rather than
-        // returning an error. This test verifies the current behavior.
         let src = "foo :: (): int { y : int = unknown }";
-        let result = std::panic::catch_unwind(|| typecheck_src(src));
-        assert!(result.is_err(), "expected panic on unknown symbol");
+        let result = typecheck_src(src);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err.kind, TypeErrorKind::UnknownSymbol(_)));
     }
 
     #[test]
     fn test_typecheck_error_unknown_symbol_in_assignment() {
-        // Note: Currently resolve_type panics on unknown symbols rather than
-        // returning an error. This test verifies the current behavior.
         let src = "foo :: (): int { y : int = 1 \n y = unknown }";
-        let result = std::panic::catch_unwind(|| typecheck_src(src));
-        assert!(result.is_err(), "expected panic on unknown symbol");
+        let result = typecheck_src(src);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err.kind, TypeErrorKind::UnknownSymbol(_)));
     }
 
     #[test]
@@ -393,7 +466,7 @@ mod tests {
         assert!(result.is_err());
 
         let err = result.unwrap_err();
-        assert!(matches!(err, TypeError::UnknownSymbol(_)));
+        assert!(matches!(err.kind, TypeErrorKind::UnknownSymbol(_)));
     }
 
     #[test]
@@ -417,15 +490,15 @@ mod tests {
         assert!(result.is_ok());
 
         let module = result.unwrap();
-        let Decl::Procedure { fn_ty, sig, .. } = &module.declarations[0] else {
+        let DeclKind::Procedure { fn_ty, sig, .. } = &module.declarations[0].node else {
             panic!("expected procedure");
         };
 
         assert!(fn_ty.is_some());
-        let Type::Fn(fn_sig) = fn_ty.as_ref().unwrap() else {
+        let TypeKind::Fn(fn_sig) = &fn_ty.as_ref().unwrap().node else {
             panic!("expected fn type");
         };
-        assert_eq!(**fn_sig, *sig);
+        assert_eq!(**fn_sig, sig.node);
     }
 
     #[test]
@@ -445,11 +518,11 @@ mod tests {
         assert!(result.is_ok());
 
         let module = result.unwrap();
-        let Decl::Constant { ty, .. } = &module.declarations[0] else {
+        let DeclKind::Constant { ty, .. } = &module.declarations[0].node else {
             panic!("expected constant");
         };
 
-        assert_eq!(*ty, Some(Type::Int));
+        assert_eq!(ty.as_ref().map(|t| &t.node), Some(&TypeKind::Int));
     }
 
     #[test]
@@ -459,11 +532,11 @@ mod tests {
         assert!(result.is_ok());
 
         let module = result.unwrap();
-        let Decl::Constant { ty, .. } = &module.declarations[0] else {
+        let DeclKind::Constant { ty, .. } = &module.declarations[0].node else {
             panic!("expected constant");
         };
 
-        assert_eq!(*ty, Some(Type::Int));
+        assert_eq!(ty.as_ref().map(|t| &t.node), Some(&TypeKind::Int));
     }
 
     #[test]
@@ -480,11 +553,14 @@ mod tests {
         assert!(result.is_ok());
 
         let module = result.unwrap();
-        let Decl::Procedure { sig, .. } = &module.declarations[0] else {
+        let DeclKind::Procedure { sig, .. } = &module.declarations[0].node else {
             panic!("expected procedure");
         };
 
-        assert_eq!(sig.return_ty, Some(Type::Int));
+        assert_eq!(
+            sig.node.return_ty.as_ref().map(|t| &t.node),
+            Some(&TypeKind::Int)
+        );
     }
 
     #[test]
@@ -494,15 +570,15 @@ mod tests {
         assert!(result.is_ok());
 
         let module = result.unwrap();
-        let Decl::Procedure { block, .. } = &module.declarations[0] else {
+        let DeclKind::Procedure { block, .. } = &module.declarations[0].node else {
             panic!("expected procedure");
         };
 
-        let Stmt::ValDec { ty, .. } = &block.stmts[0] else {
+        let StmtKind::ValDec { ty, .. } = &block.node.stmts[0].node else {
             panic!("expected val dec");
         };
 
-        assert_eq!(*ty, Some(Type::Int));
+        assert_eq!(ty.as_ref().map(|t| &t.node), Some(&TypeKind::Int));
     }
 
     #[test]
@@ -533,6 +609,6 @@ mod tests {
         assert!(result.is_err());
 
         let err = result.unwrap_err();
-        assert!(matches!(err, TypeError::UnknownSymbol(_)));
+        assert!(matches!(err.kind, TypeErrorKind::UnknownSymbol(_)));
     }
 }

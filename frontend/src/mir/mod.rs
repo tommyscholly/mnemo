@@ -16,6 +16,11 @@ pub enum Ty {
     Bool,
     Char,
     Int,
+    Unit,
+    Array(Box<Ty>, usize),
+    DynArray(Box<Ty>),
+    Tuple(Vec<Ty>),
+    Ptr(Box<Ty>),
 }
 
 impl Display for Ty {
@@ -24,6 +29,18 @@ impl Display for Ty {
             Ty::Bool => write!(f, "bool"),
             Ty::Char => write!(f, "char"),
             Ty::Int => write!(f, "int"),
+            Ty::Unit => write!(f, "unit"),
+            Ty::Array(ty, len) => write!(f, "[{}]{{ {} }}", ty, len),
+            Ty::DynArray(ty) => write!(f, "dyn{{ {} }}", ty),
+            Ty::Tuple(tys) => write!(
+                f,
+                "({})",
+                tys.iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            Ty::Ptr(ty) => write!(f, "^{}", ty),
         }
     }
 }
@@ -34,10 +51,26 @@ pub enum Operand {
     Local(LocalId),
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum AllocKind {
+    Array(Ty),
+    Tuple,
+}
+
+impl Display for AllocKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AllocKind::Array(ty) => write!(f, "array<{}>", ty),
+            AllocKind::Tuple => write!(f, "tuple"),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum RValue {
     Use(Operand),
-    BinOp(BinOp, Box<RValue>, Box<RValue>),
+    BinOp(BinOp, Operand, Operand),
+    Alloc(AllocKind, Vec<Operand>),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -95,6 +128,12 @@ impl Local {
 pub struct Function {
     pub function_id: FunctionId,
     pub blocks: Vec<BasicBlock>,
-    pub parameters: u32,
+    pub parameters: usize,
     pub locals: Vec<Local>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Module {
+    pub functions: Vec<Function>,
+    pub constants: Vec<RValue>,
 }

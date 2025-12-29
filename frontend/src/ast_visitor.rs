@@ -4,19 +4,20 @@ use crate::mir::{self, Function};
 
 use std::collections::{BTreeMap, HashMap};
 
-fn ast_type_to_mir_type(ty: &Type) -> mir::Ty {
+fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
     match ty {
-        Type::Int => mir::Ty::Int,
-        // Type::Bool => mir::Ty::Bool,
-        // Type::Unit => mir::Ty::Unit,
-        // will have more types later
-        #[allow(unreachable_patterns)]
+        TypeKind::Int => mir::Ty::Int,
+        TypeKind::Unit => mir::Ty::Unit,
+        TypeKind::Alloc(kind, _) => match kind {
+            // TODO: resolve tuple tys
+            AllocKind::Tuple => mir::Ty::Tuple(vec![]),
+            AllocKind::DynArray(ty) => mir::Ty::DynArray(Box::new(ast_type_to_mir_type(&ty.node))),
+            AllocKind::Array(ty, len) => {
+                mir::Ty::Array(Box::new(ast_type_to_mir_type(&ty.node)), *len)
+            }
+        },
         _ => todo!(),
     }
-}
-
-pub struct MIRCtx {
-    pub function_table: HashMap<Symbol, mir::Function>,
 }
 
 pub trait AstVisitor {
@@ -64,8 +65,8 @@ impl AstToMIR {
         }
     }
 
-    fn new_local(&mut self, ty: Type) -> mir::LocalId {
-        let ty = ast_type_to_mir_type(&ty);
+    fn new_local(&mut self, ty: &TypeKind) -> mir::LocalId {
+        let ty = ast_type_to_mir_type(ty);
         let current_function = self.get_current_function();
         let local_id = current_function.locals.len();
         let local = mir::Local::new(local_id, ty);
@@ -103,21 +104,57 @@ impl AstToMIR {
             .get_mut(&self.current_function.unwrap())
             .unwrap()
     }
+
+    pub fn produce_module(mut self) -> mir::Module {
+        let function_table = std::mem::take(&mut self.function_table);
+        let functions = function_table.into_values().collect();
+
+        let constants = std::mem::take(&mut self.constants);
+        let constants = constants.into_values().collect();
+
+        mir::Module {
+            functions,
+            constants,
+        }
+    }
 }
 
 impl AstVisitor for AstToMIR {
     fn visit_expr(&mut self, expr: Expr) -> mir::RValue {
-        match expr {
-            Expr::Value(v) => match v {
-                Value::Int(i) => mir::RValue::Use(mir::Operand::Constant(i)),
-                Value::Ident(i) => mir::RValue::Use(mir::Operand::Local(self.symbol_table[&i])),
+        match expr.node {
+            ExprKind::Value(v) => match v {
+                ValueKind::Int(i) => mir::RValue::Use(mir::Operand::Constant(i)),
+                ValueKind::Ident(i) => mir::RValue::Use(mir::Operand::Local(self.symbol_table[&i])),
             },
-            Expr::BinOp { op, lhs, rhs } => {
+            ExprKind::BinOp { op, lhs, rhs } => {
                 let lhs = self.visit_expr(*lhs);
+                let lhs_op = match lhs {
+                    mir::RValue::Use(op) => op,
+                    _ => {
+                        let lhs_local = self.new_local(&TypeKind::Int);
+                        self.get_current_block()
+                            .stmts
+                            .push(mir::Statement::Assign(lhs_local, lhs));
+                        mir::Operand::Local(lhs_local)
+                    }
+                };
+
                 let rhs = self.visit_expr(*rhs);
-                mir::RValue::BinOp(op, Box::new(lhs), Box::new(rhs))
+                let rhs_op = match rhs {
+                    mir::RValue::Use(op) => op,
+                    _ => {
+                        let rhs_local = self.new_local(&TypeKind::Int);
+                        self.get_current_block()
+                            .stmts
+                            .push(mir::Statement::Assign(rhs_local, rhs));
+                        mir::Operand::Local(rhs_local)
+                    }
+                };
+
+                mir::RValue::BinOp(op, lhs_op, rhs_op)
             }
-            Expr::Call(Call { callee, args }) => {
+            ExprKind::Call(Call { callee, args }) => {
+                let callee_sym = callee.node;
                 let args = args.into_iter().map(|a| self.visit_expr(a)).collect();
 
                 let next_block_idx = self.current_block + 1;
@@ -125,7 +162,7 @@ impl AstVisitor for AstToMIR {
 
                 let dest = self.get_current_function().locals.len() - 1;
                 let call_transfer = mir::Terminator::Call {
-                    function_id: self.function_table[&callee].function_id,
+                    function_id: self.function_table[&callee_sym].function_id,
                     args,
                     destination: Some(dest),
                     target: next_block_idx,
@@ -136,26 +173,31 @@ impl AstVisitor for AstToMIR {
 
                 mir::RValue::Use(mir::Operand::Local(dest))
             }
-            Expr::Allocation { kind, elements, region } => todo!()
+            ExprKind::Allocation {
+                kind: _,
+                elements: _,
+                region: _,
+            } => todo!(),
         }
     }
 
     fn visit_stmt(&mut self, stmt: Stmt) {
-        match stmt {
-            Stmt::ValDec { name, ty, expr } => {
+        match stmt.node {
+            StmtKind::ValDec { name, ty, expr } => {
                 // all types should be resolved at this point
                 let ty = ty.unwrap();
-                let local_id = self.new_local(ty);
+                let local_id = self.new_local(&ty.node);
 
-                self.symbol_table.insert(name, local_id);
+                self.symbol_table.insert(name.node, local_id);
 
                 let rvalue = self.visit_expr(expr);
                 let stmt = mir::Statement::Assign(local_id, rvalue);
                 let block = self.get_current_block();
                 block.stmts.push(stmt);
             }
-            Stmt::Assign { name, expr } => {
-                let local_id = self.symbol_table[&name];
+            StmtKind::Assign { name, expr } => {
+                let name_sym = name.node;
+                let local_id = self.symbol_table[&name_sym];
                 let rvalue = self.visit_expr(expr);
                 let old_local = &self.get_current_function().locals[local_id];
                 let ty = old_local.ty.clone();
@@ -169,14 +211,15 @@ impl AstVisitor for AstToMIR {
                 let stmt = mir::Statement::Assign(new_local_id, rvalue);
                 self.get_current_block().stmts.push(stmt);
             }
-            Stmt::Call(Call { callee, args }) => {
+            StmtKind::Call(Call { callee, args }) => {
+                let callee_sym = callee.node;
                 let args = args.into_iter().map(|a| self.visit_expr(a)).collect();
 
                 let next_block_idx = self.current_block + 1;
                 let next_block = mir::BasicBlock::new(next_block_idx);
 
                 let call_transfer = mir::Terminator::Call {
-                    function_id: self.function_table[&callee].function_id,
+                    function_id: self.function_table[&callee_sym].function_id,
                     args,
                     destination: None,
                     target: next_block_idx,
@@ -185,11 +228,11 @@ impl AstVisitor for AstToMIR {
                 self.get_current_function().blocks.push(next_block);
                 self.current_block = next_block_idx;
             }
-            Stmt::IfElse(IfElse { cond, then, else_ }) => {
+            StmtKind::IfElse(IfElse { cond, then, else_ }) => {
                 // store the current block id of where the if starts so we can refer to it later
                 let current_block_id = self.current_block;
 
-                let cond_local = self.new_local(Type::Int);
+                let cond_local = self.new_local(&TypeKind::Int);
                 let cond_rvalue = self.visit_expr(cond);
                 let cond_stmt = mir::Statement::Assign(cond_local, cond_rvalue);
                 self.get_current_block().stmts.push(cond_stmt);
@@ -247,53 +290,56 @@ impl AstVisitor for AstToMIR {
     }
 
     fn visit_block(&mut self, block: Block) {
+        let block_inner = block.node;
+
         let new_block = mir::BasicBlock::new(self.current_block + 1);
         self.get_current_function().blocks.push(new_block);
 
         self.current_block += 1;
-        for stmt in block.stmts {
+        for stmt in block_inner.stmts {
             self.visit_stmt(stmt);
         }
     }
 
     fn visit_decl(&mut self, decl: Decl) {
-        match decl {
-            Decl::Constant { name, ty: _, expr } => {
+        match decl.node {
+            DeclKind::Constant { name, ty: _, expr } => {
+                let name_sym = name.node;
                 let rvalue = self.visit_expr(expr);
-                self.constants.insert(name, rvalue);
+                self.constants.insert(name_sym, rvalue);
             }
-            Decl::TypeDef { name, def } => todo!(),
-            Decl::Procedure {
+            DeclKind::TypeDef { name: _, def: _ } => todo!(),
+            DeclKind::Procedure {
                 name,
                 fn_ty,
                 sig,
                 block,
             } => {
+                let name_sym = name.node;
                 // TODO: we do not use function types yet
                 let _fn_ty = fn_ty;
+                let sig_inner = sig.node;
+
                 let function = mir::Function {
                     function_id: self.function_table.len(),
                     blocks: Vec::new(),
-                    parameters: sig.params.patterns.len() as u32,
+                    parameters: sig_inner.params.patterns.len(),
                     locals: Vec::new(),
                 };
 
-                self.function_table.insert(name, function);
-                self.current_function = Some(name);
+                self.function_table.insert(name_sym, function);
+                self.current_function = Some(name_sym);
 
-                for (pat, type_) in sig
+                for (pat, type_) in sig_inner
                     .params
                     .patterns
                     .into_iter()
-                    .zip(sig.params.types.into_iter())
+                    .zip(sig_inner.params.types.into_iter())
                 {
-                    let local_id = self.new_local(type_);
+                    let local_id = self.new_local(&type_.node);
                     // TODO: we will have more patterns than just symbols eventually
-                    #[allow(irrefutable_let_patterns)]
-                    let Pat::Symbol(name) = pat else {
-                        panic!("expected symbol pattern")
-                    };
-                    self.symbol_table.insert(name, local_id);
+                    let PatKind::Symbol(pat_name) = pat.node;
+                    self.symbol_table.insert(pat_name, local_id);
                 }
 
                 self.visit_block(block);
@@ -313,21 +359,20 @@ impl AstVisitor for AstToMIR {
 mod tests {
     use std::collections::VecDeque;
 
-    use crate::{
-        lex::{self, Token},
-        parse,
-    };
+    use crate::{lex, parse, span::Spanned, typecheck};
 
     use super::*;
 
-    fn tokenify(s: &str) -> (Ctx, VecDeque<Token>) {
+    fn tokenify(s: &str) -> (Ctx, VecDeque<Spanned<crate::lex::Token>>) {
         let mut ctx = Ctx::new();
-        let tokens = lex::tokenize(&mut ctx, s).map(|t| t.unwrap().0).collect();
+        let tokens = lex::tokenize(&mut ctx, s).map(|t| t.unwrap()).collect();
         (ctx, tokens)
     }
 
-    fn parseify(ctx: &mut Ctx, tokens: VecDeque<Token>) -> Module {
-        parse::parse(ctx, tokens).unwrap()
+    fn parseify(ctx: &mut Ctx, tokens: VecDeque<Spanned<crate::lex::Token>>) -> Module {
+        let mut module = parse::parse(ctx, tokens).unwrap();
+        typecheck::typecheck(&mut module).unwrap();
+        module
     }
 
     const BASIC_MODULE_SRC: &str = "foo :: (x: int, y: int): int { \
@@ -347,11 +392,8 @@ mod tests {
         let mut ast_to_mir = AstToMIR::new(ctx);
         ast_to_mir.visit_module(module);
 
-        let mut mir_ctx = MIRCtx {
-            function_table: std::mem::take(&mut ast_to_mir.function_table),
-        };
-
-        mir_ctx.function_table.remove(&Symbol(0)).unwrap()
+        let mut function_table = std::mem::take(&mut ast_to_mir.function_table);
+        function_table.remove(&Symbol(0)).unwrap()
     }
 
     #[test]
@@ -418,8 +460,8 @@ mod tests {
                 3,
                 mir::RValue::BinOp(
                     lex::BinOp::Add,
-                    mir::RValue::Use(mir::Operand::Local(0)).into(),
-                    mir::RValue::Use(mir::Operand::Constant(1)).into(),
+                    mir::Operand::Local(0),
+                    mir::Operand::Constant(1),
                 ),
             )],
             terminator: mir::Terminator::Call {
@@ -455,8 +497,8 @@ mod tests {
                 4,
                 mir::RValue::BinOp(
                     lex::BinOp::Add,
-                    mir::RValue::Use(mir::Operand::Local(1)).into(),
-                    mir::RValue::Use(mir::Operand::Constant(1)).into(),
+                    mir::Operand::Local(1),
+                    mir::Operand::Constant(1),
                 ),
             )],
             terminator: mir::Terminator::Call {
