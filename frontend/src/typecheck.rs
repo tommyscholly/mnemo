@@ -106,7 +106,24 @@ impl ResolveType for Expr {
                 // TODO: implement region handling
                 // regions should be resolved by the time we get here
                 let region_handle = region.unwrap_or(Region::Local);
-                Type::synthetic(TypeKind::Alloc(kind.clone(), region_handle))
+                let kind = match kind {
+                    AllocKind::Tuple(tys) => {
+                        let mut types = Vec::new();
+                        for elem in elements {
+                            types.push(elem.resolve_type(ctx).node);
+                        }
+
+                        if tys.len() != 0 && tys.len() != types.len() && *tys != types {
+                            panic!("expected tuple types to be equal");
+                        }
+
+                        // here we resolve the tuple types if they were not provided by a type hint
+                        AllocKind::Tuple(types)
+                    }
+                    _ => kind.clone(),
+                };
+
+                Type::synthetic(TypeKind::Alloc(kind, region_handle))
             }
         }
     }

@@ -54,7 +54,7 @@ impl Type {
 pub enum AllocKind {
     DynArray(Box<Type>),
     Array(Box<Type>, usize),
-    Tuple,
+    Tuple(Vec<TypeKind>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

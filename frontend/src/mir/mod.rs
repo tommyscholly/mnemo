@@ -54,14 +54,24 @@ pub enum Operand {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum AllocKind {
     Array(Ty),
-    Tuple,
+    DynArray(Ty),
+    Tuple(Vec<Ty>),
 }
 
 impl Display for AllocKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AllocKind::Array(ty) => write!(f, "array<{}>", ty),
-            AllocKind::Tuple => write!(f, "tuple"),
+            AllocKind::Tuple(tys) => {
+                let ty_str = tys
+                    .iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<String>>()
+                    .join(" * ");
+
+                write!(f, "{}", ty_str)
+            }
+            AllocKind::DynArray(ty) => write!(f, "dyn_array<{}>", ty),
         }
     }
 }

@@ -326,7 +326,8 @@ fn parse_primary(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
 
                 Ok(Spanned::new(
                     ExprKind::Allocation {
-                        kind: AllocKind::Tuple,
+                        // filled in during typechecking
+                        kind: AllocKind::Tuple(vec![]),
                         elements: exprs,
                         region: None,
                     },
@@ -729,14 +730,8 @@ pub fn parse(ctx: &mut Ctx, tokens: VecDeque<SpannedToken>) -> ParseResult<Modul
 
 #[cfg(test)]
 mod tests {
-    use std::clone;
-
     use super::*;
-    use crate::{
-        ast::{Type, UserDefinedType},
-        ctx::Symbol,
-        lex,
-    };
+    use crate::{ast::UserDefinedType, ctx::Symbol, lex};
 
     fn tokenify(s: &str) -> (Ctx, VecDeque<SpannedToken>) {
         let mut ctx = Ctx::new();
@@ -1067,7 +1062,8 @@ mod tests {
         let ExprKind::Allocation { kind, elements, .. } = &expr.node else {
             panic!("expected allocation")
         };
-        assert!(matches!(kind, AllocKind::Tuple));
+        // types have not been resolved since we did not provide them
+        assert_eq!(*kind, AllocKind::Tuple(vec![]));
         assert_eq!(elements.len(), 3);
     }
 }

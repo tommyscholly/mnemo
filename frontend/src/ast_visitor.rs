@@ -10,7 +10,12 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
         TypeKind::Unit => mir::Ty::Unit,
         TypeKind::Alloc(kind, _) => match kind {
             // TODO: resolve tuple tys
-            AllocKind::Tuple => mir::Ty::Tuple(vec![]),
+            AllocKind::Tuple(tys) => {
+                let tys = tys.iter().map(|t| ast_type_to_mir_type(&t)).collect();
+
+                mir::Ty::Tuple(tys)
+            }
+
             AllocKind::DynArray(ty) => mir::Ty::DynArray(Box::new(ast_type_to_mir_type(&ty.node))),
             AllocKind::Array(ty, len) => {
                 mir::Ty::Array(Box::new(ast_type_to_mir_type(&ty.node)), *len)
@@ -199,9 +204,18 @@ impl AstVisitor for AstToMIR {
                         let ty = ast_type_to_mir_type(&ty.node);
                         mir::RValue::Alloc(mir::AllocKind::Array(ty), ops)
                     }
-                    AllocKind::Tuple => mir::RValue::Alloc(mir::AllocKind::Tuple, ops),
-                    AllocKind::DynArray(_ty) => {
-                        todo!()
+                    AllocKind::Tuple(tys) => {
+                        let tys = tys
+                            .into_iter()
+                            .map(|t| ast_type_to_mir_type(&t))
+                            .collect();
+
+                        mir::RValue::Alloc(mir::AllocKind::Tuple(tys), ops)
+                    }
+
+                    AllocKind::DynArray(ty) => {
+                        let ty = ast_type_to_mir_type(&ty.node);
+                        mir::RValue::Alloc(mir::AllocKind::DynArray(ty), ops)
                     }
                 }
             }
