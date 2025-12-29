@@ -11,13 +11,13 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
         TypeKind::Alloc(kind, _) => match kind {
             // TODO: resolve tuple tys
             AllocKind::Tuple(tys) => {
-                let tys = tys.iter().map(|t| ast_type_to_mir_type(&t)).collect();
+                let tys = tys.iter().map(ast_type_to_mir_type).collect();
 
                 mir::Ty::Tuple(tys)
             }
 
-            AllocKind::DynArray(ty) => mir::Ty::DynArray(Box::new(ast_type_to_mir_type(&ty))),
-            AllocKind::Array(ty, len) => mir::Ty::Array(Box::new(ast_type_to_mir_type(&ty)), *len),
+            AllocKind::DynArray(ty) => mir::Ty::DynArray(Box::new(ast_type_to_mir_type(ty))),
+            AllocKind::Array(ty, len) => mir::Ty::Array(Box::new(ast_type_to_mir_type(ty)), *len),
         },
         _ => todo!(),
     }

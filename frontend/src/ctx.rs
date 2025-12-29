@@ -15,6 +15,7 @@ impl Symbol {
 pub struct Ctx {
     strings: Vec<String>,
     indices: HashMap<String, Symbol>,
+    #[allow(unused)]
     reserved: HashMap<Symbol, String>,
 }
 
@@ -45,6 +46,7 @@ impl Ctx {
         id
     }
 
+    #[allow(unused)]
     pub fn resolve(&self, sym: Symbol) -> &str {
         if sym.0 < 0 {
             return self.reserved.get(&sym).unwrap();

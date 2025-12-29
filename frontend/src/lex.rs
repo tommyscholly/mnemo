@@ -4,6 +4,7 @@ use crate::{advance_single_token, handle_operator};
 use std::fmt::Display;
 use std::iter::Peekable;
 
+#[allow(unused)]
 #[derive(Debug)]
 pub enum LexErrorKind {
     UnexpectedChar(LexItem),
@@ -11,6 +12,7 @@ pub enum LexErrorKind {
     UnexpectedEOF,
 }
 
+#[allow(unused)]
 #[derive(Debug)]
 pub struct LexError {
     kind: LexErrorKind,

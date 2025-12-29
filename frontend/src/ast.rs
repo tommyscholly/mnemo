@@ -8,6 +8,7 @@ pub enum ValueKind {
     Ident(Symbol),
 }
 
+#[allow(unused)]
 pub type Value = Spanned<ValueKind>;
 
 #[derive(Debug, PartialEq, Eq, Clone)]

@@ -159,6 +159,7 @@ impl SourceMap {
 }
 
 /// Trait for types that can produce formatted error messages.
+#[allow(unused)]
 pub trait Diagnostic {
     /// Get the span of the error.
     fn span(&self) -> &Span;

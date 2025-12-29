@@ -113,7 +113,7 @@ impl ResolveType for Expr {
                             types.push(elem.resolve_type(ctx).node);
                         }
 
-                        if tys.len() != 0 && tys.len() != types.len() && *tys != types {
+                        if !tys.is_empty() && tys.len() != types.len() && *tys != types {
                             panic!("expected tuple types to be equal");
                         }
 
@@ -356,6 +356,7 @@ impl Typecheck for Decl {
                     .iter()
                     .zip(sig.node.params.types.iter())
                 {
+                    #[allow(irrefutable_let_patterns)]
                     if let PatKind::Symbol(sym) = pat.node {
                         ctx.type_map.insert(sym, ty.clone());
                     }
