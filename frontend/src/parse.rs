@@ -260,10 +260,10 @@ fn parse_primary(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
             let next_tok = tokens.pop_front().ok_or_else(ParseError::eof)?;
 
             let alloc_kind = match next_tok.node {
-                Token::RBracket => AllocKind::DynArray(Type::synthetic(TypeKind::Unit).into()),
+                Token::RBracket => AllocKind::DynArray(TypeKind::Int.into()),
                 Token::Int(i) => {
                     expect_next(tokens, Token::RBracket)?;
-                    AllocKind::Array(Type::synthetic(TypeKind::Int).into(), i as usize)
+                    AllocKind::Array(TypeKind::Int.into(), i as usize)
                 }
                 _ => {
                     return Err(ParseError::new(

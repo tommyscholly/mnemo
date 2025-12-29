@@ -191,9 +191,40 @@ impl Typecheck for Expr {
                 Ok(())
             }
             ExprKind::Call(c) => type_check_call(c, ctx),
-            ExprKind::Allocation { elements, .. } => {
-                for e in elements {
+            ExprKind::Allocation { elements, kind, .. } => {
+                for e in &mut *elements {
                     e.typecheck(ctx)?;
+                }
+
+                match kind {
+                    AllocKind::Tuple(tys) => {
+                        let mut types = Vec::new();
+                        for elem in elements {
+                            types.push(elem.resolve_type(ctx).node);
+                        }
+
+                        if !tys.is_empty() && tys.len() != types.len() && *tys != types {
+                            panic!("expected tuple types to be equal");
+                        }
+
+                        *tys = types;
+                    }
+                    AllocKind::Array(ty_kind, size) => {
+                        assert_eq!(*size, elements.len());
+
+                        assert!(
+                            elements
+                                .iter()
+                                .all(|e| e.resolve_type(ctx).node == **ty_kind)
+                        );
+                    }
+                    AllocKind::DynArray(ty_kind) => {
+                        assert!(
+                            elements
+                                .iter()
+                                .all(|e| e.resolve_type(ctx).node == **ty_kind)
+                        );
+                    }
                 }
                 Ok(())
             }

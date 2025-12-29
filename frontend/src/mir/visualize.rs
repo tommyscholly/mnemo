@@ -23,14 +23,14 @@ impl MIRVisualizer for RValue {
                 rhs.visualize(indent);
             }
             RValue::Alloc(kind, ops) => {
-                print!("alloc {} {{", kind);
+                print!("alloc({}) {{", kind);
                 for (i, op) in ops.iter().enumerate() {
                     op.visualize(indent);
                     if i != ops.len() - 1 {
                         print!(", ");
                     }
                 }
-                println!("}}");
+                print!("}}");
             }
         }
     }
