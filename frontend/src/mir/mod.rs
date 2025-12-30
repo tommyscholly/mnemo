@@ -139,6 +139,7 @@ pub struct Function {
     pub function_id: FunctionId,
     pub blocks: Vec<BasicBlock>,
     pub parameters: usize,
+    pub return_ty: Ty,
     pub locals: Vec<Local>,
 }
 

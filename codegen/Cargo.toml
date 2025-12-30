@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.100"
+frontend = { version = "0.1.0", path = "../frontend" }
+inkwell = { version = "0.7.0", features = ["llvm21-1"] }
+llvm-sys = "211.0.0"

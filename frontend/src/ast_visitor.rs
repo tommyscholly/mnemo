@@ -53,6 +53,7 @@ impl AstToMIR {
                 function_id: 0,
                 blocks: Vec::new(),
                 parameters: 1,
+                return_ty: mir::Ty::Unit,
                 locals: Vec::new(),
             },
         );
@@ -355,11 +356,16 @@ impl AstVisitor for AstToMIR {
                 // TODO: we do not use function types yet
                 let _fn_ty = fn_ty;
                 let sig_inner = sig.node;
+                let return_ty = sig_inner
+                    .return_ty
+                    .map(|t| ast_type_to_mir_type(&t.node))
+                    .unwrap_or(mir::Ty::Unit);
 
                 let function = mir::Function {
                     function_id: self.function_table.len(),
                     blocks: Vec::new(),
                     parameters: sig_inner.params.patterns.len(),
+                    return_ty,
                     locals: Vec::new(),
                 };
 

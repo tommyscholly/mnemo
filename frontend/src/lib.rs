@@ -3,15 +3,15 @@ mod ast_visitor;
 mod ctx;
 mod lex;
 mod macros;
-mod mir;
+pub mod mir;
 mod parse;
 mod span;
 mod typecheck;
 
+pub use ctx::{Ctx, Symbol};
 pub use mir::{Function, visualize};
 pub use span::{DUMMY_SPAN, SourceMap, Span, SpanExt, Spanned};
 
-use crate::ctx::Ctx;
 use ast_visitor::{AstToMIR, AstVisitor};
 use std::fs::File;
 use std::io::Read;
