@@ -1,7 +1,7 @@
 main :: () {
     untyped_int := 1
     typed_int : int = 2
-    // array := [2]{ 1, 2 }
+    array := [2]{ 1, 2 }
     // dyn_array := [] { 1, 2 }
     // tuple := (1, 2)
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use frontend::mir::AllocKind;
 use frontend::{BinOp, Ctx as FrontendCtx, mir};
 
 use anyhow::Result;
@@ -73,17 +74,21 @@ impl<'ctx> LLVM<'ctx> {
         self.module.get_context()
     }
 
-    fn basic_type_to_llvm_basic_type(
-        ctx: ContextRef<'ctx>,
-        ty: &mir::Ty,
-    ) -> BasicMetadataTypeEnum<'ctx> {
+    fn basic_type_to_llvm_basic_type(ctx: ContextRef<'ctx>, ty: &mir::Ty) -> BasicTypeEnum<'ctx> {
         match ty {
-            mir::Ty::Int => ctx.i32_type().as_basic_type_enum().into(),
-            mir::Ty::Bool => ctx.bool_type().as_basic_type_enum().into(),
-            mir::Ty::Char => ctx.i8_type().as_basic_type_enum().into(),
+            mir::Ty::Int => ctx.i32_type().as_basic_type_enum(),
+            mir::Ty::Bool => ctx.bool_type().as_basic_type_enum(),
+            mir::Ty::Char => ctx.i8_type().as_basic_type_enum(),
             mir::Ty::Unit => panic!("Unit type not supported as a basic type"),
             _ => todo!(),
         }
+    }
+
+    fn basic_type_to_llvm_basic_metadata_type(
+        ctx: ContextRef<'ctx>,
+        ty: &mir::Ty,
+    ) -> BasicMetadataTypeEnum<'ctx> {
+        Self::basic_type_to_llvm_basic_type(ctx, ty).into()
     }
 
     fn type_to_fn_type(
@@ -143,7 +148,39 @@ impl<'ctx> LLVM<'ctx> {
                     _ => todo!(),
                 }
             }
-            mir::RValue::Alloc(alloc_kind, operands) => todo!(),
+            mir::RValue::Alloc(alloc_kind, operands) => {
+                let data_size = self
+                    .ctx()
+                    .i32_type()
+                    .const_int(operands.len() as u64, false);
+
+                match alloc_kind {
+                    AllocKind::Array(ty) => {
+                        let ty = Self::basic_type_to_llvm_basic_type(self.ctx(), ty);
+                        let ty = ty.array_type(operands.len() as u32);
+
+                        let array_alloc = self.builder.build_alloca(ty, "array_alloca").unwrap();
+
+                        let zero = self.ctx().i32_type().const_zero();
+                        for (array_index, operand) in operands.iter().enumerate() {
+                            let value = self.compile_operand(operand)?;
+                            let array_idx =
+                                self.ctx().i32_type().const_int(array_index as u64, false);
+
+                            let gep = unsafe {
+                                self.builder
+                                    .build_gep(ty, array_alloc, &[zero, array_idx], "gep")
+                            }
+                            .unwrap();
+
+                            self.builder.build_store(gep, value).unwrap();
+                        }
+
+                        array_alloc.as_basic_value_enum()
+                    }
+                    _ => todo!(),
+                }
+            }
         };
 
         Ok(int_val)
@@ -163,7 +200,7 @@ impl<'ctx> LLVM<'ctx> {
 
                 let alloca = self
                     .builder
-                    .build_alloca(value.get_type(),format!("x{}", localid).as_str())
+                    .build_alloca(value.get_type(), format!("x{}", localid).as_str())
                     .unwrap();
 
                 let block = llvm_fn.get_last_basic_block().unwrap();
@@ -238,7 +275,9 @@ impl<'ctx> LLVM<'ctx> {
         let llvm_ctx = self.ctx();
 
         for (_i, local) in function.locals.iter().enumerate().take(function.parameters) {
-            arg_types.push(Self::basic_type_to_llvm_basic_type(llvm_ctx, &local.ty));
+            arg_types.push(Self::basic_type_to_llvm_basic_metadata_type(
+                llvm_ctx, &local.ty,
+            ));
         }
 
         let fn_type = Self::type_to_fn_type(llvm_ctx, &function.return_ty, arg_types);
