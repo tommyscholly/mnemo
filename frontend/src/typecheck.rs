@@ -49,19 +49,19 @@ impl TypecheckCtx {
 
         // Register built-in functions
         // println takes one int argument and returns unit
-        function_sigs.insert(
-            Symbol(-1), // println
-            Spanned::new(
-                SignatureInner {
-                    params: Params {
-                        patterns: vec![Spanned::new(PatKind::Symbol(Symbol(-100)), DUMMY_SPAN)],
-                        types: vec![Type::synthetic(TypeKind::Int)],
-                    },
-                    return_ty: None,
-                },
-                DUMMY_SPAN,
-            ),
-        );
+        // function_sigs.insert(
+        //     Symbol(-1), // println
+        //     Spanned::new(
+        //         SignatureInner {
+        //             params: Params {
+        //                 patterns: vec![Spanned::new(PatKind::Symbol(Symbol(-100)), DUMMY_SPAN)],
+        //                 types: vec![Type::synthetic(TypeKind::Int)],
+        //             },
+        //             return_ty: None,
+        //         },
+        //         DUMMY_SPAN,
+        //     ),
+        // );
 
         Self {
             type_map: HashMap::new(),

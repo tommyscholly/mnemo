@@ -24,10 +24,10 @@ impl Ctx {
         let strings = vec![];
         let mut indices = HashMap::new();
         // reserved indices start at -1
-        indices.insert("println".to_string(), Symbol(-1));
+        // indices.insert("println".to_string(), Symbol(-1));
 
         let mut reserved = HashMap::new();
-        reserved.insert(Symbol(-1), "println".to_string());
+        // reserved.insert(Symbol(-1), "println".to_string());
         Self {
             strings,
             indices,

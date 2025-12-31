@@ -32,10 +32,10 @@ pub trait AstVisitor {
 }
 
 #[derive(Debug)]
-pub struct AstToMIR {
+pub struct AstToMIR<'a> {
     // TODO: we will use this later for symbol lookups and other things
     #[allow(unused)]
-    ctx: Ctx,
+    ctx: &'a Ctx,
     current_function: Option<Symbol>,
     current_block: mir::BlockId,
     symbol_table: HashMap<Symbol, mir::LocalId>,
@@ -44,19 +44,19 @@ pub struct AstToMIR {
     phi_functions_to_generate: BTreeMap<mir::LocalId, Vec<mir::LocalId>>,
 }
 
-impl AstToMIR {
-    pub fn new(ctx: Ctx) -> Self {
+impl<'a> AstToMIR<'a> {
+    pub fn new(ctx: &'a Ctx) -> Self {
         let mut function_table = HashMap::new();
-        function_table.insert(
-            Symbol(-1),
-            Function {
-                function_id: 0,
-                blocks: Vec::new(),
-                parameters: 1,
-                return_ty: mir::Ty::Unit,
-                locals: Vec::new(),
-            },
-        );
+        // function_table.insert(
+        //     Symbol(-1),
+        //     Function {
+        //         function_id: 0,
+        //         blocks: Vec::new(),
+        //         parameters: 1,
+        //         return_ty: mir::Ty::Unit,
+        //         locals: Vec::new(),
+        //     },
+        // );
 
         Self {
             ctx,
@@ -123,7 +123,7 @@ impl AstToMIR {
     }
 }
 
-impl AstVisitor for AstToMIR {
+impl AstVisitor for AstToMIR<'_> {
     fn visit_expr(&mut self, expr: Expr) -> mir::RValue {
         match expr.node {
             ExprKind::Value(v) => match v {
@@ -431,7 +431,7 @@ mod tests {
         let (mut ctx, tokens) = tokenify(BASIC_MODULE_SRC);
         let module = parseify(&mut ctx, tokens);
 
-        let mut ast_to_mir = AstToMIR::new(ctx);
+        let mut ast_to_mir = AstToMIR::new(&ctx);
         ast_to_mir.visit_module(module);
 
         let mut function_table = std::mem::take(&mut ast_to_mir.function_table);

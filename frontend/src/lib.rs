@@ -11,12 +11,13 @@ mod typecheck;
 pub use ctx::{Ctx, Symbol};
 pub use mir::{Function, visualize};
 pub use span::{DUMMY_SPAN, SourceMap, Span, SpanExt, Spanned};
+pub use lex::BinOp;
 
 use ast_visitor::{AstToMIR, AstVisitor};
 use std::fs::File;
 use std::io::Read;
 
-pub fn do_frontend(file: &str) -> mir::Module {
+pub fn do_frontend(file: &str) -> (mir::Module, Ctx) {
     let mut file = File::open(file).unwrap();
 
     let mut contents = String::new();
@@ -35,8 +36,8 @@ pub fn do_frontend(file: &str) -> mir::Module {
 
     typecheck::typecheck(&mut module).unwrap();
 
-    let mut ast_visitor = AstToMIR::new(ctx);
+    let mut ast_visitor = AstToMIR::new(&ctx);
     ast_visitor.visit_module(module);
 
-    ast_visitor.produce_module()
+    (ast_visitor.produce_module(), ctx)
 }

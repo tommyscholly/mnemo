@@ -143,6 +143,16 @@ pub struct Function {
     pub locals: Vec<Local>,
 }
 
+impl IntoIterator for Function {
+    type Item = BasicBlock;
+    type IntoIter = std::vec::IntoIter<BasicBlock>;
+
+    // TOOD: make this a proper CFG traversal
+    fn into_iter(self) -> Self::IntoIter {
+        self.blocks.into_iter()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Module {
     pub functions: Vec<Function>,

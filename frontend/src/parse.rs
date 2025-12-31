@@ -458,6 +458,7 @@ fn parse_ifelse(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
 fn parse_stmt(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
     match peek_token(tokens) {
         Some(Token::Keyword(Keyword::If)) => parse_ifelse(tokens),
+        // Some(Token::Keyword(Keyword::Return))
         _ => {
             let name = expect_identifier(tokens)?;
             let start_span = name.span.clone();
