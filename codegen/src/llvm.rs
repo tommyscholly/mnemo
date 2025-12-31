@@ -149,34 +149,38 @@ impl<'ctx> LLVM<'ctx> {
                 }
             }
             mir::RValue::Alloc(alloc_kind, operands) => {
-                let data_size = self
-                    .ctx()
-                    .i32_type()
-                    .const_int(operands.len() as u64, false);
-
                 match alloc_kind {
-                    AllocKind::Array(ty) => {
-                        let ty = Self::basic_type_to_llvm_basic_type(self.ctx(), ty);
-                        let ty = ty.array_type(operands.len() as u32);
+                    AllocKind::Array(ty_hint) => {
+                        let elem_type = Self::basic_type_to_llvm_basic_type(self.ctx(), ty_hint);
 
-                        let array_alloc = self.builder.build_alloca(ty, "array_alloca").unwrap();
+                        let array_len = operands.len() as u32;
+                        let array_type = elem_type.array_type(array_len);
 
-                        let zero = self.ctx().i32_type().const_zero();
-                        for (array_index, operand) in operands.iter().enumerate() {
-                            let value = self.compile_operand(operand)?;
-                            let array_idx =
-                                self.ctx().i32_type().const_int(array_index as u64, false);
+                        // TODO: for mem2reg, allocas should ideally happen
+                        // in the function's entry block, not the current builder position.
+                        let array_ptr = self.builder.build_alloca(array_type, "array_alloca")?;
 
-                            let gep = unsafe {
-                                self.builder
-                                    .build_gep(ty, array_alloc, &[zero, array_idx], "gep")
-                            }
-                            .unwrap();
+                        let i32_type = self.ctx().i32_type();
+                        let zero = i32_type.const_zero();
 
-                            self.builder.build_store(gep, value).unwrap();
+                        for (i, operand) in operands.iter().enumerate() {
+                            let val = self.compile_operand(operand)?;
+
+                            let index = i32_type.const_int(i as u64, false);
+
+                            let elem_ptr = unsafe {
+                                self.builder.build_gep(
+                                    array_type,
+                                    array_ptr,
+                                    &[zero, index],
+                                    "elem_ptr",
+                                )?
+                            };
+
+                            self.builder.build_store(elem_ptr, val)?;
                         }
 
-                        array_alloc.as_basic_value_enum()
+                        array_ptr.as_basic_value_enum()
                     }
                     _ => todo!(),
                 }
