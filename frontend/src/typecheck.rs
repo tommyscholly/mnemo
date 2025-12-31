@@ -9,7 +9,7 @@ use crate::{
         ValueKind,
     },
     ctx::Symbol,
-    span::{DUMMY_SPAN, Span, Spanned},
+    span::{Diagnostic, DUMMY_SPAN, Span, Spanned},
 };
 
 #[derive(Debug)]
@@ -21,6 +21,20 @@ pub struct TypeError {
 impl TypeError {
     fn new(kind: TypeErrorKind, span: Span) -> Self {
         Self { kind, span }
+    }
+}
+
+impl Diagnostic for TypeError {
+    fn span(&self) -> &Span {
+        &self.span
+    }
+
+    fn message(&self) -> String {
+        "type error".to_string()
+    }
+
+    fn label(&self) -> Option<String> {
+        Some(format!("{:?}", self.kind))
     }
 }
 
@@ -225,6 +239,7 @@ impl Typecheck for Expr {
                                 .all(|e| e.resolve_type(ctx).node == **ty_kind)
                         );
                     }
+                    _ => todo!()
                 }
                 Ok(())
             }

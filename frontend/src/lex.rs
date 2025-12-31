@@ -1,5 +1,5 @@
 use crate::ctx::{Ctx, Symbol};
-use crate::span::{Span, Spanned};
+use crate::span::{Diagnostic, Span, Spanned};
 use crate::{advance_single_token, handle_operator};
 use std::fmt::Display;
 use std::iter::Peekable;
@@ -22,6 +22,20 @@ pub struct LexError {
 impl LexError {
     pub fn new(kind: LexErrorKind, span: Span) -> Self {
         Self { kind, span }
+    }
+}
+
+impl Diagnostic for LexError {
+    fn span(&self) -> &Span {
+        &self.span
+    }
+
+    fn message(&self) -> String {
+        "lex error".to_string()
+    }
+
+    fn label(&self) -> Option<String> {
+        Some(format!("{:?}", self.kind))
     }
 }
 
@@ -77,6 +91,7 @@ pub enum Token {
     At,
     Dot,
     Caret,
+    Bar,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -214,6 +229,9 @@ impl<'a, T: Iterator<Item = LexItem>> Lexer<'a, T> {
                 }
                 '.' => {
                     advance_single_token!(self, Token::Dot)
+                }
+                '|' => {
+                    advance_single_token!(self, Token::Bar)
                 }
                 '=' => {
                     handle_operator!(self, '=', '=', Token::Eq, Token::BinOp(BinOp::EqEq))

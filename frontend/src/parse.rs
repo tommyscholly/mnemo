@@ -1,13 +1,13 @@
 use std::collections::VecDeque;
 
 use crate::ast::{
-    AllocKind, Block, BlockInner, Call, Decl, DeclKind, EnumField, Expr, ExprKind, IfElse, Module,
-    Params, PatKind, Signature, SignatureInner, Stmt, StmtKind, StructField, Type, TypeKind,
-    UserDefinedType, ValueKind,
+    AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Module, Params,
+    PatKind, RecordField, Signature, SignatureInner, Stmt, StmtKind, Type, TypeAliasDefinition,
+    TypeKind, ValueKind, VariantField,
 };
 use crate::ctx::{Ctx, Symbol};
 use crate::lex::{BinOp, Keyword, Token};
-use crate::span::{Span, SpanExt, Spanned};
+use crate::span::{Diagnostic, Span, SpanExt, Spanned};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ParseError {
@@ -31,6 +31,20 @@ impl ParseError {
 
     fn eof() -> Self {
         Self::new(ParseErrorKind::UnexpectedEOF, 0..0)
+    }
+}
+
+impl Diagnostic for ParseError {
+    fn span(&self) -> &Span {
+        &self.span
+    }
+
+    fn message(&self) -> String {
+        "parse error".to_string()
+    }
+
+    fn label(&self) -> Option<String> {
+        Some(format!("{:?}", self.kind))
     }
 }
 
@@ -70,16 +84,16 @@ fn peek_span(tokens: &VecDeque<SpannedToken>) -> Option<Span> {
     tokens.front().map(|t| t.span.clone())
 }
 
-fn parse_expr(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
-    parse_logical_or(tokens)
+fn parse_expr(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
+    parse_logical_or(ctx, tokens)
 }
 
-fn parse_logical_or(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
-    let mut left = parse_logical_and(tokens)?;
+fn parse_logical_or(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
+    let mut left = parse_logical_and(ctx, tokens)?;
 
     while let Some(Token::BinOp(BinOp::Or)) = peek_token(tokens) {
         let _op_token = tokens.pop_front().unwrap();
-        let right = parse_logical_and(tokens)?;
+        let right = parse_logical_and(ctx, tokens)?;
         let span = left.span.merge(&right.span);
         left = Spanned::new(
             ExprKind::BinOp {
@@ -94,12 +108,12 @@ fn parse_logical_or(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
     Ok(left)
 }
 
-fn parse_logical_and(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
-    let mut left = parse_comparison(tokens)?;
+fn parse_logical_and(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
+    let mut left = parse_comparison(ctx, tokens)?;
 
     while let Some(Token::BinOp(BinOp::And)) = peek_token(tokens) {
         let _op_token = tokens.pop_front().unwrap();
-        let right = parse_comparison(tokens)?;
+        let right = parse_comparison(ctx, tokens)?;
         let span = left.span.merge(&right.span);
         left = Spanned::new(
             ExprKind::BinOp {
@@ -114,8 +128,8 @@ fn parse_logical_and(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
     Ok(left)
 }
 
-fn parse_comparison(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
-    let mut left = parse_additive(tokens)?;
+fn parse_comparison(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
+    let mut left = parse_additive(ctx, tokens)?;
 
     while let Some(op) = peek_token(tokens) {
         match op {
@@ -124,7 +138,7 @@ fn parse_comparison(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
             ) => {
                 let op = *op;
                 tokens.pop_front();
-                let right = parse_additive(tokens)?;
+                let right = parse_additive(ctx, tokens)?;
                 let span = left.span.merge(&right.span);
                 left = Spanned::new(
                     ExprKind::BinOp {
@@ -142,8 +156,8 @@ fn parse_comparison(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
     Ok(left)
 }
 
-fn parse_additive(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
-    let mut left = parse_multiplicative(tokens)?;
+fn parse_additive(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
+    let mut left = parse_multiplicative(ctx, tokens)?;
 
     while let Some(op) = peek_token(tokens) {
         match op {
@@ -155,7 +169,7 @@ fn parse_additive(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
                 else {
                     unreachable!()
                 };
-                let right = parse_multiplicative(tokens)?;
+                let right = parse_multiplicative(ctx, tokens)?;
                 let span = left.span.merge(&right.span);
                 left = Spanned::new(
                     ExprKind::BinOp {
@@ -173,8 +187,8 @@ fn parse_additive(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
     Ok(left)
 }
 
-fn parse_multiplicative(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
-    let mut left = parse_primary(tokens)?;
+fn parse_multiplicative(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
+    let mut left = parse_primary(ctx, tokens)?;
 
     while let Some(op) = peek_token(tokens) {
         match op {
@@ -186,7 +200,7 @@ fn parse_multiplicative(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr
                 else {
                     unreachable!()
                 };
-                let right = parse_primary(tokens)?;
+                let right = parse_primary(ctx, tokens)?;
                 let span = left.span.merge(&right.span);
                 left = Spanned::new(
                     ExprKind::BinOp {
@@ -205,9 +219,13 @@ fn parse_multiplicative(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr
 }
 
 fn parse_identifier_expr(
+    ctx: &mut Ctx,
     ident: Spanned<Symbol>,
     tokens: &mut VecDeque<SpannedToken>,
 ) -> ParseResult<Expr> {
+    let ident_name = ctx.resolve(ident.node);
+    let first_char = ident_name.chars().next().unwrap();
+    let is_variant = first_char.is_ascii_uppercase();
     if let Some(Token::LParen) = peek_token(tokens) {
         let lparen_span = tokens.pop_front().unwrap().span;
         let mut args = Vec::new();
@@ -217,7 +235,7 @@ fn parse_identifier_expr(
                 break;
             }
 
-            args.push(parse_expr(tokens)?);
+            args.push(parse_expr(ctx, tokens)?);
 
             if let Some(Token::Comma) = peek_token(tokens) {
                 tokens.pop_front();
@@ -229,23 +247,46 @@ fn parse_identifier_expr(
         let rparen_span = expect_next(tokens, Token::RParen)?;
         let span = ident.span.merge(&lparen_span).merge(&rparen_span);
 
-        return Ok(Spanned::new(
-            ExprKind::Call(Call {
-                callee: ident,
-                args,
-            }),
-            span,
-        ));
+        if is_variant {
+            // variant
+            return Ok(Spanned::new(
+                ExprKind::Allocation {
+                    kind: AllocKind::Variant(ident.node),
+                    elements: args,
+                    region: None,
+                },
+                span,
+            ));
+        } else {
+            return Ok(Spanned::new(
+                ExprKind::Call(Call {
+                    callee: ident,
+                    args,
+                }),
+                span,
+            ));
+        }
     }
 
     let span = ident.span.clone();
-    Ok(Spanned::new(
-        ExprKind::Value(ValueKind::Ident(ident.node)),
-        span,
-    ))
+    if is_variant {
+        Ok(Spanned::new(
+            ExprKind::Allocation {
+                kind: AllocKind::Variant(ident.node),
+                elements: vec![],
+                region: None,
+            },
+            span,
+        ))
+    } else {
+        Ok(Spanned::new(
+            ExprKind::Value(ValueKind::Ident(ident.node)),
+            span,
+        ))
+    }
 }
 
-fn parse_primary(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
+fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
     let Some(token) = tokens.pop_front() else {
         return Err(ParseError::eof());
     };
@@ -253,7 +294,9 @@ fn parse_primary(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
     match token.node {
         Token::Int(i) => Ok(Spanned::new(ExprKind::Value(ValueKind::Int(i)), token.span)),
 
-        Token::Identifier(name) => parse_identifier_expr(Spanned::new(name, token.span), tokens),
+        Token::Identifier(name) => {
+            parse_identifier_expr(ctx, Spanned::new(name, token.span), tokens)
+        }
 
         Token::LBracket => {
             let start_span = token.span;
@@ -281,7 +324,7 @@ fn parse_primary(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
                     break;
                 }
 
-                exprs.push(parse_expr(tokens)?);
+                exprs.push(parse_expr(ctx, tokens)?);
 
                 if let Some(Token::Comma) = peek_token(tokens) {
                     tokens.pop_front();
@@ -303,7 +346,7 @@ fn parse_primary(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
 
         Token::LParen => {
             let start_span = token.span;
-            let expr = parse_expr(tokens)?;
+            let expr = parse_expr(ctx, tokens)?;
 
             if let Some(Token::Comma) = peek_token(tokens) {
                 tokens.pop_front();
@@ -314,7 +357,7 @@ fn parse_primary(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
                         break;
                     }
 
-                    exprs.push(parse_expr(tokens)?);
+                    exprs.push(parse_expr(ctx, tokens)?);
 
                     if let Some(Token::Comma) = peek_token(tokens) {
                         tokens.pop_front();
@@ -339,6 +382,45 @@ fn parse_primary(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
             }
         }
 
+        Token::LBrace => {
+            // parsing a record
+            let start_span = token.span;
+            let mut fields = Vec::new();
+            let mut exprs = Vec::new();
+
+            loop {
+                if let Some(Token::RBrace) = peek_token(tokens) {
+                    break;
+                }
+
+                let field_name = expect_identifier(tokens)?;
+                let ty = parse_type_annot(ctx, tokens)?;
+                expect_next(tokens, Token::Eq)?;
+                let expr = parse_expr(ctx, tokens)?;
+
+                fields.push(RecordField {
+                    name: field_name.node,
+                    ty,
+                });
+                exprs.push(expr);
+
+                if let Some(Token::Comma) = peek_token(tokens) {
+                    tokens.pop_front();
+                }
+            }
+
+            let end_span = expect_next(tokens, Token::RBrace)?;
+            let span = start_span.merge(&end_span);
+            Ok(Spanned::new(
+                ExprKind::Allocation {
+                    kind: AllocKind::Record(fields),
+                    elements: exprs,
+                    region: None,
+                },
+                span,
+            ))
+        }
+
         _ => Err(ParseError::new(
             ParseErrorKind::ExpectedExpression,
             token.span,
@@ -346,7 +428,7 @@ fn parse_primary(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
     }
 }
 
-fn parse_params(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<(Params, Span)> {
+fn parse_params(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<(Params, Span)> {
     let start_span = expect_next(tokens, Token::LParen)?;
     let mut params = Params {
         patterns: Vec::new(),
@@ -359,7 +441,7 @@ fn parse_params(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<(Params, Spa
         }
 
         let name = expect_identifier(tokens)?;
-        let ty = parse_type_annot(tokens)?
+        let ty = parse_type_annot(ctx, tokens)?
             .ok_or_else(|| ParseError::new(ParseErrorKind::ExpectedType, name.span.clone()))?;
 
         params
@@ -378,11 +460,11 @@ fn parse_params(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<(Params, Spa
     Ok((params, start_span.merge(&end_span)))
 }
 
-fn parse_proc_sig(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Signature> {
-    let (params, params_span) = parse_params(tokens)?;
+fn parse_proc_sig(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Signature> {
+    let (params, params_span) = parse_params(ctx, tokens)?;
 
     let (return_ty, end_span) = if let Some(Token::Colon) = peek_token(tokens) {
-        let ty = parse_type_annot(tokens)?;
+        let ty = parse_type_annot(ctx, tokens)?;
         let end = ty
             .as_ref()
             .map(|t| t.span.clone())
@@ -396,7 +478,7 @@ fn parse_proc_sig(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Signature>
     Ok(Spanned::new(SignatureInner { params, return_ty }, span))
 }
 
-fn parse_type(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Option<Type>> {
+fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Option<Type>> {
     let ty = match peek_token(tokens) {
         Some(Token::Keyword(Keyword::Int)) => {
             let span = tokens.pop_front().unwrap().span;
@@ -408,19 +490,72 @@ fn parse_type(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Option<Type>> 
 
             Spanned::new(TypeKind::Char, span)
         }
-        Some(Token::Identifier(_)) => {
-            let Spanned {
-                node: Token::Identifier(name),
-                span,
-            } = tokens.pop_front().unwrap()
-            else {
-                unreachable!()
-            };
-            Spanned::new(TypeKind::UserDef(name), span)
+        Some(Token::Identifier(name)) => {
+            let name_str = ctx.resolve(*name);
+
+            let front_letter = name_str.chars().next().unwrap();
+            let is_uppercase = front_letter.is_ascii_uppercase();
+
+            if is_uppercase {
+                // variant
+                // variants may have bars, such as Some(T) | None
+                let mut fields = Vec::new();
+                loop {
+                    let variant_name = expect_identifier(tokens)?;
+                    if let Some(Token::LParen) = peek_token(tokens) {
+                        let _ = tokens.pop_front().unwrap();
+
+                        let mut adts = Vec::new();
+                        loop {
+                            if let Some(Token::RParen) = peek_token(tokens) {
+                                break;
+                            }
+
+                            adts.push(parse_type(ctx, tokens)?.unwrap());
+
+                            if let Some(Token::Comma) = peek_token(tokens) {
+                                tokens.pop_front();
+                            }
+                        }
+
+                        expect_next(tokens, Token::RParen)?;
+                        fields.push(VariantField {
+                            name: variant_name,
+                            adts,
+                        });
+                    } else {
+                        fields.push(VariantField {
+                            name: variant_name,
+                            adts: Vec::new(),
+                        });
+                    }
+
+                    if let Some(Token::Bar) = peek_token(tokens) {
+                        tokens.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+
+                // first has to exist, and last can be first
+                let first_span = fields.first().unwrap().name.span.clone();
+                let span = fields.last().unwrap().name.span.merge(&first_span);
+
+                Spanned::new(TypeKind::Variant(fields), span)
+            } else {
+                let Spanned {
+                    node: Token::Identifier(name),
+                    span,
+                } = tokens.pop_front().unwrap()
+                else {
+                    unreachable!()
+                };
+                Spanned::new(TypeKind::TypeAlias(name), span)
+            }
         }
         Some(Token::Caret) => {
             let caret_span = tokens.pop_front().unwrap().span;
-            let ty = match parse_type(tokens)? {
+            let ty = match parse_type(ctx, tokens)? {
                 Some(ty) => ty,
                 None => return Err(ParseError::new(ParseErrorKind::ExpectedType, caret_span)),
             };
@@ -436,7 +571,10 @@ fn parse_type(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Option<Type>> 
     Ok(Some(ty))
 }
 
-fn parse_type_annot(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Option<Type>> {
+fn parse_type_annot(
+    ctx: &mut Ctx,
+    tokens: &mut VecDeque<SpannedToken>,
+) -> ParseResult<Option<Type>> {
     let Some(Spanned {
         node: Token::Colon,
         span: _,
@@ -445,17 +583,17 @@ fn parse_type_annot(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Option<T
         return Err(ParseError::new(ParseErrorKind::ExpectedType, 0..0));
     };
 
-    parse_type(tokens)
+    parse_type(ctx, tokens)
 }
 
-fn parse_ifelse(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
+fn parse_ifelse(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
     let if_span = expect_next(tokens, Token::Keyword(Keyword::If))?;
-    let cond = parse_expr(tokens)?;
-    let then = parse_block(tokens)?;
+    let cond = parse_expr(ctx, tokens)?;
+    let then = parse_block(ctx, tokens)?;
 
     let (else_, end_span) = if let Some(Token::Keyword(Keyword::Else)) = peek_token(tokens) {
         expect_next(tokens, Token::Keyword(Keyword::Else))?;
-        let else_block = parse_block(tokens)?;
+        let else_block = parse_block(ctx, tokens)?;
         let span = else_block.span.clone();
         (Some(else_block), span)
     } else {
@@ -469,9 +607,9 @@ fn parse_ifelse(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
     ))
 }
 
-fn parse_stmt(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
+fn parse_stmt(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
     match peek_token(tokens) {
-        Some(Token::Keyword(Keyword::If)) => parse_ifelse(tokens),
+        Some(Token::Keyword(Keyword::If)) => parse_ifelse(ctx, tokens),
         // Some(Token::Keyword(Keyword::Return))
         _ => {
             let name = expect_identifier(tokens)?;
@@ -479,20 +617,20 @@ fn parse_stmt(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
 
             match peek_token(tokens) {
                 Some(Token::Colon) => {
-                    let ty = parse_type_annot(tokens)?;
+                    let ty = parse_type_annot(ctx, tokens)?;
                     expect_next(tokens, Token::Eq)?;
-                    let expr = parse_expr(tokens)?;
+                    let expr = parse_expr(ctx, tokens)?;
                     let span = start_span.merge(&expr.span);
                     Ok(Spanned::new(StmtKind::ValDec { name, ty, expr }, span))
                 }
                 Some(Token::Eq) => {
                     expect_next(tokens, Token::Eq)?;
-                    let expr = parse_expr(tokens)?;
+                    let expr = parse_expr(ctx, tokens)?;
                     let span = start_span.merge(&expr.span);
                     Ok(Spanned::new(StmtKind::Assign { name, expr }, span))
                 }
                 Some(Token::LParen) => {
-                    let expr = parse_identifier_expr(name.clone(), tokens)?;
+                    let expr = parse_identifier_expr(ctx, name.clone(), tokens)?;
                     let ExprKind::Call(call) = expr.node else {
                         unreachable!()
                     };
@@ -508,7 +646,7 @@ fn parse_stmt(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
     }
 }
 
-fn parse_block(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Block> {
+fn parse_block(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Block> {
     let start_span = expect_next(tokens, Token::LBrace)?;
     let mut stmts = Vec::new();
 
@@ -517,7 +655,7 @@ fn parse_block(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Block> {
             break;
         }
 
-        stmts.push(parse_stmt(tokens)?);
+        stmts.push(parse_stmt(ctx, tokens)?);
     }
 
     let end_span = expect_next(tokens, Token::RBrace)?;
@@ -527,12 +665,13 @@ fn parse_block(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Block> {
 }
 
 fn parse_procedure(
+    ctx: &mut Ctx,
     name: Spanned<Symbol>,
     fn_ty: Option<Type>,
     tokens: &mut VecDeque<SpannedToken>,
 ) -> ParseResult<Decl> {
-    let sig = parse_proc_sig(tokens)?;
-    let block = parse_block(tokens)?;
+    let sig = parse_proc_sig(ctx, tokens)?;
+    let block = parse_block(ctx, tokens)?;
     let span = name.span.merge(&block.span);
 
     Ok(Spanned::new(
@@ -590,27 +729,30 @@ fn extract_typedef_fields(
 }
 
 #[inline]
-fn is_struct(fields: &[VecDeque<SpannedToken>]) -> bool {
+fn is_record(fields: &[VecDeque<SpannedToken>]) -> bool {
     fields
         .iter()
         .all(|f| f.iter().any(|t| t.node == Token::Colon))
 }
 
-fn parse_struct_fields(fields: Vec<VecDeque<SpannedToken>>) -> Vec<StructField> {
+fn parse_record_fields(ctx: &mut Ctx, fields: Vec<VecDeque<SpannedToken>>) -> Vec<RecordField> {
     fields
         .into_iter()
         .map(|mut field_tokens| {
             let name = expect_identifier(&mut field_tokens).unwrap();
-            let ty = parse_type_annot(&mut field_tokens)
+            let ty = parse_type_annot(ctx, &mut field_tokens)
                 .expect("to parse")
                 .expect("expected type annot on struct field");
 
-            StructField { name, ty }
+            RecordField {
+                name: name.node,
+                ty: Some(ty),
+            }
         })
         .collect()
 }
 
-fn parse_enum_fields(fields: Vec<VecDeque<SpannedToken>>) -> Vec<EnumField> {
+fn parse_enum_fields(fields: Vec<VecDeque<SpannedToken>>) -> Vec<VariantField> {
     fields
         .into_iter()
         .map(|mut field_tokens| {
@@ -635,7 +777,8 @@ fn parse_enum_fields(fields: Vec<VecDeque<SpannedToken>>) -> Vec<EnumField> {
                         else {
                             unreachable!()
                         };
-                        adts.push(Spanned::new(TypeKind::UserDef(type_name), span));
+
+                        adts.push(Spanned::new(TypeKind::TypeAlias(type_name), span));
                     } else {
                         panic!("expected type name or int");
                     }
@@ -648,12 +791,13 @@ fn parse_enum_fields(fields: Vec<VecDeque<SpannedToken>>) -> Vec<EnumField> {
                 field_tokens.pop_front();
             }
 
-            EnumField { name, adts }
+            VariantField { name, adts }
         })
         .collect()
 }
 
 fn parse_typedef(
+    ctx: &mut Ctx,
     name: Spanned<Symbol>,
     _ty: Option<Type>,
     tokens: &mut VecDeque<SpannedToken>,
@@ -661,18 +805,19 @@ fn parse_typedef(
     let start_span = name.span.clone();
     let fields = extract_typedef_fields(tokens)?;
 
-    if is_struct(&fields) {
-        let struct_fields = parse_struct_fields(fields);
-        let end_span = struct_fields
+    if is_record(&fields) {
+        let record_fields = parse_record_fields(ctx, fields);
+
+        let end_span = record_fields
             .last()
-            .map(|f| f.ty.span.clone())
+            .map(|f| f.ty.as_ref().unwrap().span.clone())
             .unwrap_or(start_span.clone());
         let span = start_span.merge(&end_span);
 
         Ok(Spanned::new(
             DeclKind::TypeDef {
                 name,
-                def: UserDefinedType::Struct(struct_fields),
+                def: TypeAliasDefinition::Record(record_fields),
             },
             span,
         ))
@@ -687,21 +832,21 @@ fn parse_typedef(
         Ok(Spanned::new(
             DeclKind::TypeDef {
                 name,
-                def: UserDefinedType::Enum(enum_fields),
+                def: TypeAliasDefinition::Variant(enum_fields),
             },
             span,
         ))
     }
 }
 
-fn parse_decls(_ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Vec<Decl>> {
+fn parse_decls(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Vec<Decl>> {
     let mut decs = Vec::new();
 
     while !tokens.is_empty() {
         let name = expect_identifier(tokens)?;
         let start_span = name.span.clone();
 
-        let ty = parse_type_annot(tokens)?;
+        let ty = parse_type_annot(ctx, tokens)?;
 
         let Some(Spanned {
             node: Token::Colon, ..
@@ -715,19 +860,19 @@ fn parse_decls(_ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResu
 
         match peek_token(tokens) {
             Some(Token::LParen) => {
-                decs.push(parse_procedure(name, ty, tokens)?);
+                decs.push(parse_procedure(ctx, name, ty, tokens)?);
             }
             Some(Token::LBrace) => {
-                decs.push(parse_typedef(name, ty, tokens)?);
+                decs.push(parse_typedef(ctx, name, ty, tokens)?);
             }
             Some(Token::Keyword(Keyword::Extern)) => {
                 expect_next(tokens, Token::Keyword(Keyword::Extern))?;
-                let sig = parse_proc_sig(tokens)?;
+                let sig = parse_proc_sig(ctx, tokens)?;
                 let span = name.span.merge(&sig.span);
                 decs.push(Spanned::new(DeclKind::Extern { name, sig }, span));
             }
             Some(_) => {
-                let expr = parse_expr(tokens)?;
+                let expr = parse_expr(ctx, tokens)?;
                 let span = start_span.merge(&expr.span);
                 decs.push(Spanned::new(DeclKind::Constant { name, ty, expr }, span));
             }
@@ -752,7 +897,7 @@ pub fn parse(ctx: &mut Ctx, tokens: VecDeque<SpannedToken>) -> ParseResult<Modul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ast::UserDefinedType, ctx::Symbol, lex};
+    use crate::{ast::TypeAliasDefinition, ctx::Symbol, lex};
 
     fn tokenify(s: &str) -> (Ctx, VecDeque<SpannedToken>) {
         let mut ctx = Ctx::new();
@@ -983,7 +1128,7 @@ mod tests {
         let DeclKind::TypeDef { def, .. } = &decs[0].node else {
             unreachable!()
         };
-        let UserDefinedType::Struct(fields) = def else {
+        let TypeAliasDefinition::Record(fields) = def else {
             panic!("expected struct")
         };
         assert_eq!(fields.len(), 2);
@@ -997,7 +1142,7 @@ mod tests {
         let DeclKind::TypeDef { def, .. } = &decs[0].node else {
             unreachable!()
         };
-        let UserDefinedType::Enum(fields) = def else {
+        let TypeAliasDefinition::Variant(fields) = def else {
             panic!("expected enum")
         };
         assert_eq!(fields.len(), 3);
@@ -1011,7 +1156,7 @@ mod tests {
         let DeclKind::TypeDef { def, .. } = &decs[0].node else {
             unreachable!()
         };
-        let UserDefinedType::Enum(fields) = def else {
+        let TypeAliasDefinition::Variant(fields) = def else {
             panic!("expected enum")
         };
         assert_eq!(fields.len(), 3);
@@ -1076,7 +1221,6 @@ mod tests {
         };
         assert_eq!(block.node.stmts.len(), 1);
 
-        // Verify it's a tuple allocation
         let StmtKind::ValDec { expr, .. } = &block.node.stmts[0].node else {
             unreachable!()
         };
@@ -1086,5 +1230,88 @@ mod tests {
         // types have not been resolved since we did not provide them
         assert_eq!(*kind, AllocKind::Tuple(vec![]));
         assert_eq!(elements.len(), 3);
+    }
+
+    #[test]
+    fn parse_record() {
+        let decs = expect_parse_ok(
+            "foo :: () { 
+                x := { a := 1, b := 2 }
+            }",
+            1,
+        );
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            unreachable!()
+        };
+        assert_eq!(block.node.stmts.len(), 1);
+
+        let StmtKind::ValDec { expr, .. } = &block.node.stmts[0].node else {
+            unreachable!()
+        };
+        let ExprKind::Allocation { kind, elements, .. } = &expr.node else {
+            panic!("expected allocation")
+        };
+
+        // types have not been resolved since we did not provide them
+        assert_eq!(
+            *kind,
+            AllocKind::Record(vec![
+                RecordField {
+                    name: Symbol(2),
+                    ty: None
+                },
+                RecordField {
+                    name: Symbol(3),
+                    ty: None
+                }
+            ])
+        );
+        assert_eq!(elements.len(), 2);
+    }
+
+    #[test]
+    fn parse_variant() {
+        let decs = expect_parse_ok(
+            "foo :: () { 
+                x := None
+                y := Some(1)
+            }",
+            1,
+        );
+
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            unreachable!()
+        };
+        assert_eq!(block.node.stmts.len(), 2);
+
+        let StmtKind::ValDec { expr: expr1, .. } = &block.node.stmts[0].node else {
+            unreachable!()
+        };
+
+        eprintln!("{:#?}", expr1);
+        assert!(matches!(
+            &expr1.node,
+            ExprKind::Allocation {
+                kind: AllocKind::Variant(variant_name),
+                elements,..
+
+            } if *variant_name == Symbol(2) && elements.is_empty()
+        ));
+
+        let StmtKind::ValDec { expr: expr2, .. } = &block.node.stmts[1].node else {
+            unreachable!()
+        };
+        assert!(matches!(
+            &expr2.node,
+            ExprKind::Allocation {
+                kind: AllocKind::Variant(variant_name),
+                elements,..
+
+            } if *variant_name == Symbol(4) && elements.len() == 1 && elements[0].node == ExprKind::Value(ValueKind::Int(1))
+        ));
     }
 }

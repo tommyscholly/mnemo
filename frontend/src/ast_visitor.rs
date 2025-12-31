@@ -18,6 +18,7 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
 
             AllocKind::DynArray(ty) => mir::Ty::DynArray(Box::new(ast_type_to_mir_type(ty))),
             AllocKind::Array(ty, len) => mir::Ty::Array(Box::new(ast_type_to_mir_type(ty)), *len),
+            _ => todo!()
         },
         TypeKind::Ptr(ty) => mir::Ty::Ptr(Box::new(ast_type_to_mir_type(ty))),
         TypeKind::Char => mir::Ty::Char,
@@ -224,6 +225,7 @@ impl AstVisitor for AstToMIR<'_> {
                         let ty = ast_type_to_mir_type(&ty);
                         mir::RValue::Alloc(mir::AllocKind::DynArray(ty), ops)
                     }
+                    _ => todo!()
                 }
             }
         }

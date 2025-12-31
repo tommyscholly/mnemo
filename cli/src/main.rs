@@ -11,7 +11,13 @@ struct Options {
 
 fn main() {
     let options = Options::parse();
-    let (module, ctx) = do_frontend(&options.file);
+    let (module, ctx) = match do_frontend(&options.file) {
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    };
 
     module.visualize(0);
 

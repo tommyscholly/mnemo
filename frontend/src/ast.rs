@@ -12,13 +12,13 @@ pub enum ValueKind {
 pub type Value = Spanned<ValueKind>;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct StructField {
-    pub name: Spanned<Symbol>,
-    pub ty: Type,
+pub struct RecordField {
+    pub name: Symbol,
+    pub ty: Option<Type>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct EnumField {
+pub struct VariantField {
     pub name: Spanned<Symbol>,
     // enums can have associated data of N types, or just be single names
     // NormalEnum :: { One, Two, Foo, Bar }
@@ -27,9 +27,9 @@ pub struct EnumField {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum UserDefinedType {
-    Struct(Vec<StructField>),
-    Enum(Vec<EnumField>),
+pub enum TypeAliasDefinition {
+    Record(Vec<RecordField>),
+    Variant(Vec<VariantField>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -38,7 +38,10 @@ pub enum TypeKind {
     Int,
     Bool,
     Char,
-    UserDef(Symbol),
+    TypeAlias(Symbol),
+    Record(Vec<RecordField>),
+    Variant(Vec<VariantField>),
+
     Fn(Box<SignatureInner>),
     Alloc(AllocKind, Region),
     // all ptrs must be qualified with a region (at some point)
@@ -59,6 +62,8 @@ pub enum AllocKind {
     DynArray(Box<TypeKind>),
     Array(Box<TypeKind>, usize),
     Tuple(Vec<TypeKind>),
+    Record(Vec<RecordField>),
+    Variant(Symbol),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -164,12 +169,10 @@ pub enum DeclKind {
         ty: Option<Type>,
         expr: Expr,
     },
-
     TypeDef {
         name: Spanned<Symbol>,
-        def: UserDefinedType,
+        def: TypeAliasDefinition,
     },
-
     Procedure {
         name: Spanned<Symbol>,
         // TODO: implement fn_tys
