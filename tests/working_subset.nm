@@ -5,6 +5,10 @@ main :: () {
     untyped_int := 1
     typed_int : int = 2
     array := [2]{ 1, 2 }
+
+    fmt_string := make_fmt_str()
+    printf(fmt_string, typed_int)
+
     // dyn_array := [] { 1, 2 }
     // tuple := (1, 2)
 }

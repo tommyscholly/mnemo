@@ -170,8 +170,14 @@ impl AstVisitor for AstToMIR<'_> {
                 let next_block = mir::BasicBlock::new(next_block_idx);
 
                 let dest = self.get_current_function().locals.len() - 1;
+                let name = self.ctx.resolve(callee_sym).to_string();
+                let in_fns_or_externs = self.function_table.contains_key(&callee_sym)
+                    || self.externs.iter().any(|e| e.name == name);
+
+                assert!(in_fns_or_externs);
+
                 let call_transfer = mir::Terminator::Call {
-                    function_id: self.function_table[&callee_sym].function_id,
+                    function_name: name,
                     args,
                     destination: Some(dest),
                     target: next_block_idx,
@@ -260,8 +266,14 @@ impl AstVisitor for AstToMIR<'_> {
                 let next_block_idx = self.current_block + 1;
                 let next_block = mir::BasicBlock::new(next_block_idx);
 
+                let name = self.ctx.resolve(callee_sym).to_string();
+                let in_fns_or_externs = self.function_table.contains_key(&callee_sym)
+                    || self.externs.iter().any(|e| e.name == name);
+
+                assert!(in_fns_or_externs);
+
                 let call_transfer = mir::Terminator::Call {
-                    function_id: self.function_table[&callee_sym].function_id,
+                    function_name: name,
                     args,
                     destination: None,
                     target: next_block_idx,
@@ -390,7 +402,6 @@ impl AstVisitor for AstToMIR<'_> {
 
                 let function = mir::Function {
                     name: self.ctx.resolve(name_sym).to_string(),
-                    function_id: self.function_table.len(),
                     blocks: Vec::new(),
                     parameters: sig_inner.params.patterns.len(),
                     return_ty,
@@ -445,13 +456,16 @@ mod tests {
         module
     }
 
-    const BASIC_MODULE_SRC: &str = "foo :: (x: int, y: int): int { \
+    const BASIC_MODULE_SRC: &str = "
+    bar :: extern (x: int)
+
+    foo :: (x: int, y: int): int { \
                 if x {\
                     x = x + 1\
-                    println(x)\
+                    bar(x)\
                 } else {\
                     y = y + 1\
-                    println(y)\
+                    bar(y)\
                 }\
             }";
 
@@ -463,7 +477,7 @@ mod tests {
         ast_to_mir.visit_module(module);
 
         let mut function_table = std::mem::take(&mut ast_to_mir.function_table);
-        function_table.remove(&Symbol(0)).unwrap()
+        function_table.remove(&Symbol(2)).unwrap()
     }
 
     #[test]
@@ -495,7 +509,7 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(func.function_id, 1);
+        assert_eq!(func.name, "foo".to_string());
         assert_eq!(func.parameters, 2);
     }
 
@@ -535,7 +549,7 @@ mod tests {
                 ),
             )],
             terminator: mir::Terminator::Call {
-                function_id: 0,
+                function_name: "bar".to_string(),
                 args: vec![mir::RValue::Use(mir::Operand::Local(0))],
                 destination: None,
                 target: 4,
@@ -572,7 +586,7 @@ mod tests {
                 ),
             )],
             terminator: mir::Terminator::Call {
-                function_id: 0,
+                function_name: "bar".to_string(),
                 args: vec![mir::RValue::Use(mir::Operand::Local(1))],
                 destination: None,
                 target: 7,

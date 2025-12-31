@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use frontend::mir::AllocKind;
 use frontend::{BinOp, Ctx as FrontendCtx, mir};
@@ -15,19 +16,27 @@ use inkwell::targets::{
 use inkwell::types::{
     AnyType, AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType,
 };
-use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+};
 use inkwell::{AddressSpace, OptimizationLevel};
 
 use crate::Compiler;
 
 struct FunctionLocalInfo<'ctx> {
+    ty: BasicTypeEnum<'ctx>,
     alloc: PointerValue<'ctx>,
     defining_block: BasicBlock<'ctx>,
 }
 
 impl<'ctx> FunctionLocalInfo<'ctx> {
-    fn new(alloc: PointerValue<'ctx>, defining_block: BasicBlock<'ctx>) -> Self {
+    fn new(
+        ty: BasicTypeEnum<'ctx>,
+        alloc: PointerValue<'ctx>,
+        defining_block: BasicBlock<'ctx>,
+    ) -> Self {
         Self {
+            ty,
             alloc,
             defining_block,
         }
@@ -38,6 +47,7 @@ pub struct LLVM<'ctx> {
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     function_locals: HashMap<mir::LocalId, FunctionLocalInfo<'ctx>>,
+    function_blocks: Vec<BasicBlock<'ctx>>,
     target_machine: TargetMachine,
 }
 
@@ -67,6 +77,7 @@ impl<'ctx> LLVM<'ctx> {
             builder,
             target_machine,
             function_locals: HashMap::new(),
+            function_blocks: Vec::new(),
         }
     }
 
@@ -124,9 +135,8 @@ impl<'ctx> LLVM<'ctx> {
             mir::Operand::Local(local_id) => {
                 let local = self.function_locals.get(local_id).unwrap();
 
-                let i32_type = self.ctx().i32_type();
                 self.builder
-                    .build_load(i32_type, local.alloc, "load")
+                    .build_load(local.ty, local.alloc, "load")
                     .unwrap()
                     .as_basic_value_enum()
             }
@@ -247,6 +257,37 @@ impl<'ctx> LLVM<'ctx> {
             mir::Terminator::Return => {
                 let _ = self.builder.build_return(None);
             }
+            mir::Terminator::Call {
+                function_name,
+                args,
+                destination,
+                target,
+            } => {
+                let fn_val = self.module.get_function(function_name.as_str()).unwrap();
+
+                let mut call_args = Vec::new();
+                for rval in args {
+                    let basic_elem_type = self.compile_rvalue(&rval, llvm_fn, ctx)?;
+                    call_args.push(basic_elem_type.into());
+                }
+
+                let call = self.builder.build_call(fn_val, &call_args, "call_result")?;
+
+                if let Some(destination) = destination {
+                    let alloc = self.function_locals.get(&destination).unwrap().alloc;
+                    //
+                    // SAFETY: destination should only be SOME if the call returns
+                    let call_value = call.try_as_basic_value().basic().unwrap();
+                    self.builder.build_store(alloc, call_value)?;
+                }
+
+                let target_block = self
+                    .ctx()
+                    .append_basic_block(*llvm_fn, &format!("bb{}", target));
+                self.function_blocks.push(target_block);
+
+                self.builder.build_unconditional_branch(target_block)?;
+            }
             _ => todo!(),
         }
 
@@ -259,9 +300,22 @@ impl<'ctx> LLVM<'ctx> {
         llvm_fn: &FunctionValue<'ctx>,
         ctx: &FrontendCtx,
     ) -> Result<BasicBlock<'ctx>> {
-        let bb = self
-            .ctx()
-            .append_basic_block(*llvm_fn, &format!("bb{}", block.block_id));
+        println!(
+            "compiling block {} with len {}",
+            block.block_id,
+            self.function_blocks.len()
+        );
+        let bb = if self.function_blocks.len() == block.block_id {
+            self.function_blocks[block.block_id - 1]
+        } else {
+            let bb = self
+                .ctx()
+                .append_basic_block(*llvm_fn, &format!("bb{}", block.block_id));
+            self.function_blocks.push(bb);
+
+            bb
+        };
+        self.builder.position_at_end(bb);
 
         for stmt in block.stmts.iter() {
             self.compile_statement(stmt, llvm_fn, ctx)?;
@@ -298,7 +352,7 @@ impl<'ctx> LLVM<'ctx> {
                 .builder
                 .build_alloca(local_ty, format!("x{}", local.id).as_str())?;
 
-            let local_info = FunctionLocalInfo::new(local_alloca, entry_block);
+            let local_info = FunctionLocalInfo::new(local_ty, local_alloca, entry_block);
             self.function_locals.insert(local.id, local_info);
         }
 
@@ -310,8 +364,6 @@ impl<'ctx> LLVM<'ctx> {
                 self.builder.position_at_end(bb);
             }
         }
-
-        llvm_fn.print_to_stderr();
 
         Ok(())
     }
@@ -327,6 +379,19 @@ impl<'ctx> LLVM<'ctx> {
         let _ = self.module.add_function(&extern_.name, fn_ty, None);
         Ok(())
     }
+
+    fn output(self) {
+        let triple = TargetMachine::get_default_triple();
+
+        self.module
+            .set_data_layout(&self.target_machine.get_target_data().get_data_layout());
+        self.module.set_triple(&triple);
+
+        let path = Path::new("a.o");
+        let _ = self
+            .target_machine
+            .write_to_file(&self.module, FileType::Object, path);
+    }
 }
 
 impl<'ctx> Compiler for LLVM<'ctx> {
@@ -339,7 +404,11 @@ impl<'ctx> Compiler for LLVM<'ctx> {
             self.compile_function(function, &ctx)?;
         }
 
+        self.module.print_to_stderr();
         self.module.verify().unwrap();
+
+        self.output();
+
         Ok(())
     }
 }

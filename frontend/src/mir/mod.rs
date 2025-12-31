@@ -8,7 +8,6 @@ use crate::lex::BinOp;
 
 // corresponds to locals in the defining function
 pub type LocalId = usize;
-pub type FunctionId = usize;
 pub type BlockId = usize;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -97,7 +96,7 @@ pub enum Terminator {
     // usize is index of the local for the condition
     BrIf(usize, BlockId, BlockId),
     Call {
-        function_id: FunctionId,
+        function_name: String,
         args: Vec<RValue>,
         destination: Option<LocalId>,
         target: BlockId,
@@ -137,7 +136,6 @@ impl Local {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Function {
     pub name: String,
-    pub function_id: FunctionId,
     pub blocks: Vec<BasicBlock>,
     pub parameters: usize,
     pub return_ty: Ty,

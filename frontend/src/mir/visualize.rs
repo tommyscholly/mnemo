@@ -50,13 +50,13 @@ impl MIRVisualizer for Terminator {
                 )
             }
             Terminator::Call {
-                function_id,
+                function_name,
                 args,
                 destination,
                 target,
             } => {
                 let dest = destination.map_or("None".to_string(), |f| format!("{}", f));
-                print!("call ${} (", function_id);
+                print!("call ${} (", function_name);
                 args.iter().for_each(|a| a.visualize(indent));
                 println!(") {} {}", dest, target)
             }
@@ -97,7 +97,7 @@ impl MIRVisualizer for Function {
     fn visualize(&self, indent: usize) {
         let tabs = "\t".repeat(indent);
         print!("{tabs}");
-        print!("fn ${}(", self.function_id);
+        print!("fn ${}(", self.name);
         for (i, local) in self.locals.iter().enumerate().take(self.parameters) {
             print!("{}: {}", i, local.ty);
             if i != self.locals.len() - 1 {
