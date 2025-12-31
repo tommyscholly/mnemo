@@ -29,6 +29,8 @@ impl LexError {
 pub enum Keyword {
     Int,
     Return,
+    Extern,
+    Char,
     If,
     Else,
 }
@@ -40,8 +42,10 @@ impl TryFrom<&str> for Keyword {
         match value {
             "int" => Ok(Keyword::Int),
             "return" => Ok(Keyword::Return),
+            "extern" => Ok(Keyword::Extern),
             "if" => Ok(Keyword::If),
             "else" => Ok(Keyword::Else),
+            "char" => Ok(Keyword::Char),
             _ => Err(()),
         }
     }
@@ -72,6 +76,7 @@ pub enum Token {
     Arrow,
     At,
     Dot,
+    Caret,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -173,6 +178,9 @@ impl<'a, T: Iterator<Item = LexItem>> Lexer<'a, T> {
                     } else {
                         advance_single_token!(self, Token::BinOp(BinOp::Div))
                     }
+                }
+                '^' => {
+                    advance_single_token!(self, Token::Caret)
                 }
                 '@' => {
                     advance_single_token!(self, Token::At)

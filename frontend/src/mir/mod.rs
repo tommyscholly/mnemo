@@ -155,7 +155,15 @@ impl IntoIterator for Function {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub struct Extern {
+    pub name: String,
+    pub params: Vec<Ty>,
+    pub return_ty: Ty,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub struct Module {
     pub functions: Vec<Function>,
     pub constants: Vec<RValue>,
+    pub externs: Vec<Extern>,
 }

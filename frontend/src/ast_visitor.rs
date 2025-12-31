@@ -19,6 +19,8 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
             AllocKind::DynArray(ty) => mir::Ty::DynArray(Box::new(ast_type_to_mir_type(ty))),
             AllocKind::Array(ty, len) => mir::Ty::Array(Box::new(ast_type_to_mir_type(ty)), *len),
         },
+        TypeKind::Ptr(ty) => mir::Ty::Ptr(Box::new(ast_type_to_mir_type(ty))),
+        TypeKind::Char => mir::Ty::Char,
         _ => todo!(),
     }
 }
@@ -42,11 +44,12 @@ pub struct AstToMIR<'a> {
     function_table: HashMap<Symbol, Function>,
     constants: HashMap<Symbol, mir::RValue>,
     phi_functions_to_generate: BTreeMap<mir::LocalId, Vec<mir::LocalId>>,
+    externs: Vec<mir::Extern>,
 }
 
 impl<'a> AstToMIR<'a> {
     pub fn new(ctx: &'a Ctx) -> Self {
-        let mut function_table = HashMap::new();
+        let function_table = HashMap::new();
         // function_table.insert(
         //     Symbol(-1),
         //     Function {
@@ -66,6 +69,7 @@ impl<'a> AstToMIR<'a> {
             function_table,
             constants: HashMap::new(),
             phi_functions_to_generate: BTreeMap::new(),
+            externs: Vec::new(),
         }
     }
 
@@ -119,6 +123,7 @@ impl<'a> AstToMIR<'a> {
         mir::Module {
             functions,
             constants,
+            externs: self.externs,
         }
     }
 }
@@ -340,6 +345,28 @@ impl AstVisitor for AstToMIR<'_> {
 
     fn visit_decl(&mut self, decl: Decl) {
         match decl.node {
+            DeclKind::Extern { name, sig } => {
+                let sig_inner = sig.node;
+                let param_types = sig_inner
+                    .params
+                    .types
+                    .into_iter()
+                    .map(|t| ast_type_to_mir_type(&t.node))
+                    .collect();
+
+                let return_ty = sig_inner
+                    .return_ty
+                    .map(|t| ast_type_to_mir_type(&t.node))
+                    .unwrap_or(mir::Ty::Unit);
+
+                let name = self.ctx.resolve(name.node).to_string();
+                let extern_ = mir::Extern {
+                    name,
+                    params: param_types,
+                    return_ty,
+                };
+                self.externs.push(extern_);
+            }
             DeclKind::Constant { name, ty: _, expr } => {
                 let name_sym = name.node;
                 let rvalue = self.visit_expr(expr);

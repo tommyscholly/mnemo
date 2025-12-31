@@ -396,6 +396,46 @@ fn parse_proc_sig(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Signature>
     Ok(Spanned::new(SignatureInner { params, return_ty }, span))
 }
 
+fn parse_type(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Option<Type>> {
+    let ty = match peek_token(tokens) {
+        Some(Token::Keyword(Keyword::Int)) => {
+            let span = tokens.pop_front().unwrap().span;
+
+            Spanned::new(TypeKind::Int, span)
+        }
+        Some(Token::Keyword(Keyword::Char)) => {
+            let span = tokens.pop_front().unwrap().span;
+
+            Spanned::new(TypeKind::Char, span)
+        }
+        Some(Token::Identifier(_)) => {
+            let Spanned {
+                node: Token::Identifier(name),
+                span,
+            } = tokens.pop_front().unwrap()
+            else {
+                unreachable!()
+            };
+            Spanned::new(TypeKind::UserDef(name), span)
+        }
+        Some(Token::Caret) => {
+            let caret_span = tokens.pop_front().unwrap().span;
+            let ty = match parse_type(tokens)? {
+                Some(ty) => ty,
+                None => return Err(ParseError::new(ParseErrorKind::ExpectedType, caret_span)),
+            };
+
+            let span = caret_span.merge(&ty.span);
+            Spanned::new(TypeKind::Ptr(Box::new(ty.node)), span)
+        }
+        _ => {
+            return Ok(None);
+        }
+    };
+
+    Ok(Some(ty))
+}
+
 fn parse_type_annot(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Option<Type>> {
     let Some(Spanned {
         node: Token::Colon,
@@ -405,33 +445,7 @@ fn parse_type_annot(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Option<T
         return Err(ParseError::new(ParseErrorKind::ExpectedType, 0..0));
     };
 
-    if let Some(Token::Keyword(_)) = peek_token(tokens) {
-        let Spanned {
-            node: Token::Keyword(type_name),
-            span,
-        } = tokens.pop_front().unwrap()
-        else {
-            unreachable!()
-        };
-
-        match type_name {
-            Keyword::Int => Ok(Some(Spanned::new(TypeKind::Int, span))),
-            // will be used here once more keywords are in
-            #[allow(unreachable_patterns)]
-            _ => Err(ParseError::new(ParseErrorKind::ExpectedType, span)),
-        }
-    } else if let Some(Token::Identifier(_)) = peek_token(tokens) {
-        let Spanned {
-            node: Token::Identifier(name),
-            span,
-        } = tokens.pop_front().unwrap()
-        else {
-            unreachable!()
-        };
-        Ok(Some(Spanned::new(TypeKind::UserDef(name), span)))
-    } else {
-        Ok(None)
-    }
+    parse_type(tokens)
 }
 
 fn parse_ifelse(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
@@ -705,6 +719,12 @@ fn parse_decls(_ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResu
             }
             Some(Token::LBrace) => {
                 decs.push(parse_typedef(name, ty, tokens)?);
+            }
+            Some(Token::Keyword(Keyword::Extern)) => {
+                expect_next(tokens, Token::Keyword(Keyword::Extern))?;
+                let sig = parse_proc_sig(tokens)?;
+                let span = name.span.merge(&sig.span);
+                decs.push(Spanned::new(DeclKind::Extern { name, sig }, span));
             }
             Some(_) => {
                 let expr = parse_expr(tokens)?;

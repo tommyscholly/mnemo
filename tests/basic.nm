@@ -16,7 +16,7 @@ pattern_matching :: (x: ADT) -> int {
     }
 }
 
-bar :: () -> (fn(int) -> int) @ R 
+bar :: () : (fn(int) : int) @ R 
   with R: region
 {
   // colon delineates a type annotation

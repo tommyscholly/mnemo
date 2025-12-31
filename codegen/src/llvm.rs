@@ -84,6 +84,7 @@ impl<'ctx> LLVM<'ctx> {
                 let ty = Self::basic_type_to_llvm_basic_type(ctx, ty);
                 ty.array_type(*len as u32).as_basic_type_enum()
             }
+            mir::Ty::Ptr(_) => ctx.ptr_type(AddressSpace::default()).as_basic_type_enum(),
             _ => todo!(),
         }
     }
@@ -105,6 +106,10 @@ impl<'ctx> LLVM<'ctx> {
             mir::Ty::Bool => ctx.bool_type().fn_type(&param_types, false),
             mir::Ty::Char => ctx.i8_type().fn_type(&param_types, false),
             mir::Ty::Unit => ctx.void_type().fn_type(&param_types, false),
+            mir::Ty::Ptr(_) => ctx
+                .ptr_type(AddressSpace::default())
+                .fn_type(&param_types, false),
+
             _ => todo!(),
         }
     }
@@ -256,7 +261,7 @@ impl<'ctx> LLVM<'ctx> {
     ) -> Result<BasicBlock<'ctx>> {
         let bb = self
             .ctx()
-            .append_basic_block(*llvm_fn, &format!("bb {}", block.block_id));
+            .append_basic_block(*llvm_fn, &format!("bb{}", block.block_id));
 
         for stmt in block.stmts.iter() {
             self.compile_statement(stmt, llvm_fn, ctx)?;
@@ -310,10 +315,26 @@ impl<'ctx> LLVM<'ctx> {
 
         Ok(())
     }
+
+    fn compile_extern(&mut self, extern_: mir::Extern) -> Result<()> {
+        let param_types = extern_
+            .params
+            .iter()
+            .map(|ty| Self::basic_type_to_llvm_basic_metadata_type(self.ctx(), ty))
+            .collect();
+
+        let fn_ty = Self::type_to_fn_type(self.ctx(), &extern_.return_ty, param_types);
+        let _ = self.module.add_function(&extern_.name, fn_ty, None);
+        Ok(())
+    }
 }
 
 impl<'ctx> Compiler for LLVM<'ctx> {
     fn compile(mut self, module: mir::Module, ctx: FrontendCtx) -> Result<()> {
+        for extern_ in module.externs {
+            self.compile_extern(extern_)?;
+        }
+
         for function in module.functions {
             self.compile_function(function, &ctx)?;
         }

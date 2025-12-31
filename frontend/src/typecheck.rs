@@ -303,6 +303,9 @@ impl Typecheck for Block {
 impl Typecheck for Decl {
     fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
         match &mut self.node {
+            DeclKind::Extern { name, sig } => {
+                ctx.function_sigs.insert(name.node, sig.clone());
+            }
             DeclKind::Constant { name, ty, expr } => {
                 expr.typecheck(ctx)?;
                 let expr_ty = expr.resolve_type(ctx);

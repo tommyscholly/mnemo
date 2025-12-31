@@ -37,9 +37,12 @@ pub enum TypeKind {
     Unit,
     Int,
     Bool,
+    Char,
     UserDef(Symbol),
     Fn(Box<SignatureInner>),
     Alloc(AllocKind, Region),
+    // all ptrs must be qualified with a region (at some point)
+    Ptr(Box<TypeKind> /*, Region */),
 }
 
 pub type Type = Spanned<TypeKind>;
@@ -152,6 +155,10 @@ pub type Signature = Spanned<SignatureInner>;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DeclKind {
     // name :: int
+    Extern {
+        name: Spanned<Symbol>,
+        sig: Signature,
+    },
     Constant {
         name: Spanned<Symbol>,
         ty: Option<Type>,
