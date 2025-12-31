@@ -362,6 +362,7 @@ impl AstVisitor for AstToMIR<'_> {
                     .unwrap_or(mir::Ty::Unit);
 
                 let function = mir::Function {
+                    name: self.ctx.resolve(name_sym).to_string(),
                     function_id: self.function_table.len(),
                     blocks: Vec::new(),
                     parameters: sig_inner.params.patterns.len(),

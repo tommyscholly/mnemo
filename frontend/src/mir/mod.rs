@@ -136,6 +136,7 @@ impl Local {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Function {
+    pub name: String,
     pub function_id: FunctionId,
     pub blocks: Vec<BasicBlock>,
     pub parameters: usize,

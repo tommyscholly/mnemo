@@ -19,6 +19,13 @@ pattern_matching :: (x: ADT) -> int {
 bar :: () -> (fn(int) -> int) @ R 
   with R: region
 {
+  // colon delineates a type annotation
+  // type annotations are optional for locals
+  x : int = 1
+
+  // variables may be reassigned
+  x = 2
+
   closure := fn(x: int) = x + 5 @ R
   // this is a heap allocated array of 5 ints
   array := [4]{1, 2, 3, 4} @ R

@@ -80,6 +80,10 @@ impl<'ctx> LLVM<'ctx> {
             mir::Ty::Bool => ctx.bool_type().as_basic_type_enum(),
             mir::Ty::Char => ctx.i8_type().as_basic_type_enum(),
             mir::Ty::Unit => panic!("Unit type not supported as a basic type"),
+            mir::Ty::Array(ty, len) => {
+                let ty = Self::basic_type_to_llvm_basic_type(ctx, ty);
+                ty.array_type(*len as u32).as_basic_type_enum()
+            }
             _ => todo!(),
         }
     }
@@ -202,14 +206,8 @@ impl<'ctx> LLVM<'ctx> {
             mir::Statement::Assign(localid, rvalue) => {
                 let value = self.compile_rvalue(rvalue, llvm_fn, ctx)?;
 
-                let alloca = self
-                    .builder
-                    .build_alloca(value.get_type(), format!("x{}", localid).as_str())
-                    .unwrap();
+                let alloca = self.function_locals.get(localid).unwrap().alloc;
 
-                let block = llvm_fn.get_last_basic_block().unwrap();
-                let local_info = FunctionLocalInfo::new(alloca, block);
-                self.function_locals.insert(*localid, local_info);
                 self.builder.build_store(alloca, value).unwrap();
             }
             mir::Statement::Phi(localid, local_ids) => {
@@ -224,14 +222,10 @@ impl<'ctx> LLVM<'ctx> {
                     phi_value.add_incoming(&[(&local.alloc, local.defining_block)]);
                 }
 
-                let phi_alloca = self.builder.build_alloca(i32_type, "alloca").unwrap();
+                let alloca = self.function_locals.get(localid).unwrap().alloc;
                 self.builder
-                    .build_store(phi_alloca, phi_value.as_basic_value())
+                    .build_store(alloca, phi_value.as_basic_value())
                     .unwrap();
-
-                let block = llvm_fn.get_last_basic_block().unwrap();
-                let local_info = FunctionLocalInfo::new(phi_alloca, block);
-                self.function_locals.insert(*localid, local_info);
             }
         }
 
@@ -259,8 +253,9 @@ impl<'ctx> LLVM<'ctx> {
         block: mir::BasicBlock,
         llvm_fn: &FunctionValue<'ctx>,
         ctx: &FrontendCtx,
-    ) -> Result<()> {
-        self.ctx()
+    ) -> Result<BasicBlock<'ctx>> {
+        let bb = self
+            .ctx()
             .append_basic_block(*llvm_fn, &format!("bb {}", block.block_id));
 
         for stmt in block.stmts.iter() {
@@ -269,7 +264,7 @@ impl<'ctx> LLVM<'ctx> {
 
         self.compile_terminator(block.terminator, llvm_fn, ctx)?;
 
-        Ok(())
+        Ok(bb)
     }
 
     fn compile_function(&mut self, function: mir::Function, ctx: &FrontendCtx) -> Result<()> {
@@ -285,14 +280,30 @@ impl<'ctx> LLVM<'ctx> {
         }
 
         let fn_type = Self::type_to_fn_type(llvm_ctx, &function.return_ty, arg_types);
-        let llvm_fn = self.module.add_function(
-            format!("{}", function.function_id).as_str(),
-            fn_type,
-            Some(Linkage::External),
-        );
+        let llvm_fn =
+            self.module
+                .add_function(function.name.as_str(), fn_type, Some(Linkage::External));
+
+        let entry_block = self.ctx().append_basic_block(llvm_fn, "entry");
+        self.builder.position_at_end(entry_block);
+
+        for local in function.locals.iter().skip(function.parameters) {
+            let local_ty = Self::basic_type_to_llvm_basic_type(llvm_ctx, &local.ty);
+            let local_alloca = self
+                .builder
+                .build_alloca(local_ty, format!("x{}", local.id).as_str())?;
+
+            let local_info = FunctionLocalInfo::new(local_alloca, entry_block);
+            self.function_locals.insert(local.id, local_info);
+        }
 
         for block in function.into_iter() {
-            self.compile_block(block, &llvm_fn, ctx)?;
+            let bb = self.compile_block(block, &llvm_fn, ctx)?;
+            if entry_block.get_terminator().is_none() {
+                self.builder.position_at_end(entry_block);
+                self.builder.build_unconditional_branch(bb).unwrap();
+                self.builder.position_at_end(bb);
+            }
         }
 
         llvm_fn.print_to_stderr();
