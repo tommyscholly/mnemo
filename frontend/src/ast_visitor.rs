@@ -158,6 +158,68 @@ impl<'a> AstToMIR<'a> {
             .unwrap()
     }
 
+    fn resolve_callee_function_name(&mut self, callee: &Expr) -> Option<Symbol> {
+        let callee_expr = &callee.node;
+
+        match callee_expr {
+            ExprKind::Value(ValueKind::Ident(name)) => {
+                if self.function_table.contains_key(name) {
+                    return Some(*name);
+                } else if self
+                    .externs
+                    .iter()
+                    .any(|e| e.name == self.ctx.resolve(*name))
+                {
+                    return Some(*name);
+                } else {
+                    return None;
+                }
+            }
+            ExprKind::FieldAccess(_, method_name) => {
+                // TOOD: we are doing UFCS: x.method() = method(x)
+                // same as type checking, we will need to switch this for structural impls
+                let name = method_name;
+
+                if self.function_table.contains_key(name) {
+                    return Some(*name);
+                } else if self
+                    .externs
+                    .iter()
+                    .any(|e| e.name == self.ctx.resolve(*name))
+                {
+                    return Some(*name);
+                } else {
+                    return None;
+                }
+            }
+            _ => {
+                // for first-class functions, we would need to check that callee's type is TypeKind::Fn
+                panic!("unimplemented callee type {:?}", callee_expr);
+            }
+        }
+    }
+
+    fn call(&mut self, callee: Expr, args: Vec<Expr>, dest: Option<mir::LocalId>) {
+        let args = args.into_iter().map(|a| self.visit_expr(a)).collect();
+
+        let next_block_idx = self.current_block + 1;
+        let next_block = mir::BasicBlock::new(next_block_idx);
+
+        let name = self.resolve_callee_function_name(&callee);
+        assert!(name.is_some());
+
+        let name = self.ctx.resolve(name.unwrap()).to_string();
+        let call_transfer = mir::Terminator::Call {
+            function_name: name,
+            args,
+            destination: dest,
+            target: next_block_idx,
+        };
+        self.get_current_block().terminator = call_transfer;
+        self.get_current_function().blocks.push(next_block);
+        self.current_block = next_block_idx;
+    }
+
     pub fn produce_module(mut self) -> mir::Module {
         let function_table = std::mem::take(&mut self.function_table);
         let functions = function_table.into_values().collect();
@@ -208,28 +270,8 @@ impl AstVisitor for AstToMIR<'_> {
                 mir::RValue::BinOp(op, lhs_op, rhs_op)
             }
             ExprKind::Call(Call { callee, args }) => {
-                let callee_sym = callee.node;
-                let args = args.into_iter().map(|a| self.visit_expr(a)).collect();
-
-                let next_block_idx = self.current_block + 1;
-                let next_block = mir::BasicBlock::new(next_block_idx);
-
                 let dest = self.get_current_function().locals.len() - 1;
-                let name = self.ctx.resolve(callee_sym).to_string();
-                let in_fns_or_externs = self.function_table.contains_key(&callee_sym)
-                    || self.externs.iter().any(|e| e.name == name);
-
-                assert!(in_fns_or_externs);
-
-                let call_transfer = mir::Terminator::Call {
-                    function_name: name,
-                    args,
-                    destination: Some(dest),
-                    target: next_block_idx,
-                };
-                self.get_current_block().terminator = call_transfer;
-                self.get_current_function().blocks.push(next_block);
-                self.current_block = next_block_idx;
+                self.call(*callee, args, Some(dest));
 
                 mir::RValue::Use(mir::Operand::Local(dest))
             }
@@ -292,6 +334,9 @@ impl AstVisitor for AstToMIR<'_> {
                     }
                 }
             }
+            ExprKind::FieldAccess(expr, field_name) => {
+                todo!()
+            }
         }
     }
 
@@ -326,27 +371,7 @@ impl AstVisitor for AstToMIR<'_> {
                 self.get_current_block().stmts.push(stmt);
             }
             StmtKind::Call(Call { callee, args }) => {
-                let callee_sym = callee.node;
-                let args = args.into_iter().map(|a| self.visit_expr(a)).collect();
-
-                let next_block_idx = self.current_block + 1;
-                let next_block = mir::BasicBlock::new(next_block_idx);
-
-                let name = self.ctx.resolve(callee_sym).to_string();
-                let in_fns_or_externs = self.function_table.contains_key(&callee_sym)
-                    || self.externs.iter().any(|e| e.name == name);
-
-                assert!(in_fns_or_externs);
-
-                let call_transfer = mir::Terminator::Call {
-                    function_name: name,
-                    args,
-                    destination: None,
-                    target: next_block_idx,
-                };
-                self.get_current_block().terminator = call_transfer;
-                self.get_current_function().blocks.push(next_block);
-                self.current_block = next_block_idx;
+                self.call(*callee, args, None);
             }
             StmtKind::IfElse(IfElse { cond, then, else_ }) => {
                 // store the current block id of where the if starts so we can refer to it later

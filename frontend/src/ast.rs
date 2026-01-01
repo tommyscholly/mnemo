@@ -85,7 +85,7 @@ pub enum Region {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Call {
-    pub callee: Spanned<Symbol>,
+    pub callee: Box<Expr>,
     pub args: Vec<Expr>,
 }
 
@@ -104,6 +104,7 @@ pub enum ExprKind {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    FieldAccess(Box<Expr>, Symbol),
     // a function call that is used in an assignment or declaration
     Call(Call),
 }

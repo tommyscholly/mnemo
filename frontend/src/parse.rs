@@ -85,7 +85,8 @@ fn peek_span(tokens: &VecDeque<SpannedToken>) -> Option<Span> {
 }
 
 fn parse_expr(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
-    parse_logical_or(ctx, tokens)
+    let expr = parse_logical_or(ctx, tokens)?;
+    Ok(expr)
 }
 
 fn parse_logical_or(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
@@ -187,8 +188,55 @@ fn parse_additive(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRe
     Ok(left)
 }
 
+fn parse_postfix(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
+    let mut expr = parse_primary(ctx, tokens)?;
+
+    loop {
+        match peek_token(tokens) {
+            Some(Token::Dot) => {
+                tokens.pop_front();
+                let field = expect_identifier(tokens)?;
+                let span = expr.span.merge(&field.span);
+                expr = Spanned::new(ExprKind::FieldAccess(Box::new(expr), field.node), span);
+            }
+            Some(Token::LParen) => {
+                // Handle calls on any expression (method calls, etc.)
+                tokens.pop_front();
+                let mut args = Vec::new();
+
+                loop {
+                    if let Some(Token::RParen) = peek_token(tokens) {
+                        break;
+                    }
+                    args.push(parse_expr(ctx, tokens)?);
+                    if let Some(Token::Comma) = peek_token(tokens) {
+                        tokens.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+
+                let end_span = expect_next(tokens, Token::RParen)?;
+                let span = expr.span.merge(&end_span);
+
+                // You'll need to decide how to represent this in your AST
+                expr = Spanned::new(
+                    ExprKind::Call(Call {
+                        callee: Box::new(expr), // Requires changing Call struct
+                        args,
+                    }),
+                    span,
+                );
+            }
+            _ => break,
+        }
+    }
+
+    Ok(expr)
+}
+
 fn parse_multiplicative(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
-    let mut left = parse_primary(ctx, tokens)?;
+    let mut left = parse_postfix(ctx, tokens)?;
 
     while let Some(op) = peek_token(tokens) {
         match op {
@@ -200,7 +248,7 @@ fn parse_multiplicative(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> P
                 else {
                     unreachable!()
                 };
-                let right = parse_primary(ctx, tokens)?;
+                let right = parse_postfix(ctx, tokens)?;
                 let span = left.span.merge(&right.span);
                 left = Spanned::new(
                     ExprKind::BinOp {
@@ -258,9 +306,12 @@ fn parse_identifier_expr(
                 span,
             ));
         } else {
+            let ident_expr =
+                Spanned::new(ExprKind::Value(ValueKind::Ident(ident.node)), span.clone());
+
             return Ok(Spanned::new(
                 ExprKind::Call(Call {
-                    callee: ident,
+                    callee: Box::new(ident_expr),
                     args,
                 }),
                 span,
@@ -1331,5 +1382,231 @@ mod tests {
 
             } if *variant_name == Symbol(4) && elements.len() == 1 && elements[0].node == ExprKind::Value(ValueKind::Int(1))
         ));
+    }
+
+    #[test]
+    fn parse_field_access_simple() {
+        let decs = expect_parse_ok(
+            "foo :: () { 
+            x := y.field
+        }",
+            1,
+        );
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            unreachable!()
+        };
+        assert_eq!(block.node.stmts.len(), 1);
+
+        let StmtKind::ValDec { expr, .. } = &block.node.stmts[0].node else {
+            unreachable!()
+        };
+
+        let ExprKind::FieldAccess(base, field) = &expr.node else {
+            panic!("expected field access, got {:?}", expr.node)
+        };
+
+        // base should be identifier 'y'
+        assert!(matches!(base.node, ExprKind::Value(ValueKind::Ident(_))));
+        // field should be 'field' (Symbol(3) after foo, x, y)
+        assert_eq!(*field, Symbol(3));
+    }
+
+    #[test]
+    fn parse_field_access_chained() {
+        let decs = expect_parse_ok(
+            "foo :: () { 
+            x := y.a.b.c
+        }",
+            1,
+        );
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            unreachable!()
+        };
+
+        let StmtKind::ValDec { expr, .. } = &block.node.stmts[0].node else {
+            unreachable!()
+        };
+
+        // Should parse as ((y.a).b).c
+        let ExprKind::FieldAccess(inner1, field_c) = &expr.node else {
+            panic!("expected field access")
+        };
+        assert_eq!(*field_c, Symbol(5)); // 'c'
+
+        let ExprKind::FieldAccess(inner2, field_b) = &inner1.node else {
+            panic!("expected field access")
+        };
+        assert_eq!(*field_b, Symbol(4)); // 'b'
+
+        let ExprKind::FieldAccess(base, field_a) = &inner2.node else {
+            panic!("expected field access")
+        };
+        assert_eq!(*field_a, Symbol(3)); // 'a'
+
+        assert!(matches!(base.node, ExprKind::Value(ValueKind::Ident(_))));
+    }
+
+    #[test]
+    fn parse_field_access_with_binop() {
+        let decs = expect_parse_ok(
+            "foo :: () { 
+            x := a.x + b.y
+        }",
+            1,
+        );
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            unreachable!()
+        };
+
+        let StmtKind::ValDec { expr, .. } = &block.node.stmts[0].node else {
+            unreachable!()
+        };
+
+        // Should parse as (a.x) + (b.y)
+        let ExprKind::BinOp { op, lhs, rhs } = &expr.node else {
+            panic!("expected binop, got {:?}", expr.node)
+        };
+        assert_eq!(*op, BinOp::Add);
+
+        assert!(matches!(lhs.node, ExprKind::FieldAccess(_, _)));
+        assert!(matches!(rhs.node, ExprKind::FieldAccess(_, _)));
+    }
+
+    #[test]
+    fn parse_field_access_with_multiply() {
+        let decs = expect_parse_ok(
+            "foo :: () { 
+            x := a.x * b.y + c.z
+        }",
+            1,
+        );
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            unreachable!()
+        };
+
+        let StmtKind::ValDec { expr, .. } = &block.node.stmts[0].node else {
+            unreachable!()
+        };
+
+        // Should parse as ((a.x) * (b.y)) + (c.z)
+        let ExprKind::BinOp { op, lhs, rhs } = &expr.node else {
+            panic!("expected binop")
+        };
+        assert_eq!(*op, BinOp::Add);
+
+        // rhs should be c.z
+        assert!(matches!(rhs.node, ExprKind::FieldAccess(_, _)));
+
+        // lhs should be (a.x * b.y)
+        let ExprKind::BinOp { op: inner_op, .. } = &lhs.node else {
+            panic!("expected binop")
+        };
+        assert_eq!(*inner_op, BinOp::Mul);
+    }
+
+    #[test]
+    fn parse_field_access_on_call_result() {
+        let decs = expect_parse_ok(
+            "foo :: () { 
+            x := bar().field
+        }",
+            1,
+        );
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            unreachable!()
+        };
+
+        let StmtKind::ValDec { expr, .. } = &block.node.stmts[0].node else {
+            unreachable!()
+        };
+
+        let ExprKind::FieldAccess(base, _field) = &expr.node else {
+            panic!("expected field access, got {:?}", expr.node)
+        };
+
+        assert!(matches!(base.node, ExprKind::Call(_)));
+    }
+
+    #[test]
+    fn parse_field_access_on_parens() {
+        let decs = expect_parse_ok(
+            "foo :: () { 
+            x := (a).field
+        }",
+            1,
+        );
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            unreachable!()
+        };
+
+        let StmtKind::ValDec { expr, .. } = &block.node.stmts[0].node else {
+            unreachable!()
+        };
+
+        assert!(matches!(expr.node, ExprKind::FieldAccess(_, _)));
+    }
+
+    #[test]
+    fn parse_field_access_missing_field_name() {
+        expect_err_kind(
+            "foo :: () { 
+            x := y.
+        }",
+            ParseErrorKind::ExpectedIdentifier,
+        );
+    }
+
+    #[test]
+    fn parse_field_access_call() {
+        let decs = expect_parse_ok(
+            "foo :: () { 
+            x := y.method()
+        }",
+            1,
+        );
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            unreachable!()
+        };
+
+        let StmtKind::ValDec { expr, .. } = &block.node.stmts[0].node else {
+            unreachable!()
+        };
+
+        let ExprKind::Call(call) = &expr.node else {
+            panic!("expected call, got {:?}", expr.node)
+        };
+
+        // should be a field access: y.method
+        let ExprKind::FieldAccess(receiver, method_name) = &call.callee.node else {
+            panic!(
+                "expected field access as callee, got {:?}",
+                call.callee.node
+            )
+        };
+
+        // receiver should be identifier '
+        assert!(matches!(
+            receiver.node,
+            ExprKind::Value(ValueKind::Ident(Symbol(2)))
+        ));
+
+        // name should be method
+        assert_eq!(*method_name, Symbol(3));
+
+        assert!(call.args.is_empty());
     }
 }

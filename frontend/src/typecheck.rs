@@ -65,6 +65,12 @@ pub enum TypeErrorKind {
         found: TypeKind,
     },
     UnknownSymbol(Symbol),
+    ArgCountMismatch {
+        expected: usize,
+        found: usize,
+    },
+    UnknownMethod(Symbol),
+    NotCallable,
 }
 
 pub struct TypecheckCtx<'a> {
@@ -123,7 +129,7 @@ impl ResolveType for Expr {
                 lhs_ty
             }
             ExprKind::Call(Call { callee, args: _ }) => {
-                let callee_sig = ctx.function_sigs.get(&callee.node).unwrap();
+                let (callee_sig, _) = resolve_callee_signature(&callee, ctx).unwrap();
                 match callee_sig.node.return_ty.clone() {
                     Some(ty) => ty,
                     None => Type::synthetic(TypeKind::Unit),
@@ -169,6 +175,9 @@ impl ResolveType for Expr {
 
                 Type::synthetic(TypeKind::Alloc(kind, region_handle))
             }
+            ExprKind::FieldAccess(expr, field) => {
+                todo!()
+            }
         }
     }
 }
@@ -179,20 +188,28 @@ trait Typecheck {
 }
 
 fn type_check_call(call: &mut Call, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-    let Some(callee_sig) = ctx.function_sigs.get(&call.callee.node) else {
-        return Err(TypeError::new(
-            TypeErrorKind::UnknownSymbol(call.callee.node),
-            call.callee.span.clone(),
-        ));
-    };
-
-    // drop ctx &mut borrow here
-    let callee_signature = callee_sig.clone();
-
+    // First, typecheck all arguments
     for arg in call.args.iter_mut() {
         arg.typecheck(ctx)?;
     }
 
+    // Resolve the callee to a signature
+    let (callee_signature, span) = resolve_callee_signature(&call.callee, ctx)?;
+
+    // Check argument count
+    let expected_count = callee_signature.node.params.types.len();
+    let found_count = call.args.len();
+    if expected_count != found_count {
+        return Err(TypeError::new(
+            TypeErrorKind::ArgCountMismatch {
+                expected: expected_count,
+                found: found_count,
+            },
+            call.callee.span.clone(),
+        ));
+    }
+
+    // Check argument types
     for (arg, ty) in call
         .args
         .iter()
@@ -213,8 +230,43 @@ fn type_check_call(call: &mut Call, ctx: &mut TypecheckCtx) -> TypecheckResult<(
     Ok(())
 }
 
+pub fn resolve_callee_signature(
+    callee: &Expr,
+    ctx: &TypecheckCtx,
+) -> TypecheckResult<(Signature, Span)> {
+    match &callee.node {
+        ExprKind::Value(ValueKind::Ident(name)) => {
+            let Some(sig) = ctx.function_sigs.get(name) else {
+                return Err(TypeError::new(
+                    TypeErrorKind::UnknownSymbol(*name),
+                    callee.span.clone(),
+                ));
+            };
+            Ok((sig.clone(), callee.span.clone()))
+        }
+        // for now, we are doing UFCS: x.method() = method(x)
+        // eventually we may have structural typing impls
+        ExprKind::FieldAccess(receiver, method_name) => {
+            let Some(sig) = ctx.function_sigs.get(method_name) else {
+                return Err(TypeError::new(
+                    TypeErrorKind::UnknownMethod(*method_name),
+                    callee.span.clone(),
+                ));
+            };
+            Ok((sig.clone(), callee.span.clone()))
+        }
+        _ => {
+            // For first-class functions, you'd check that callee's type is TypeKind::Fn
+            // and extract the signature from there
+            Err(TypeError::new(
+                TypeErrorKind::NotCallable,
+                callee.span.clone(),
+            ))
+        }
+    }
+}
+
 impl Typecheck for Expr {
-    #[allow(clippy::only_used_in_recursion)]
     fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
         match &mut self.node {
             ExprKind::Value(v) => match v {
@@ -290,6 +342,9 @@ impl Typecheck for Expr {
                     _ => todo!(),
                 }
                 Ok(())
+            }
+            ExprKind::FieldAccess(expr, field) => {
+                todo!()
             }
         }
     }

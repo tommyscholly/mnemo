@@ -1,9 +1,15 @@
 // structure for the frontend to pass around to track data
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub struct Symbol(pub u32);
+
+impl Display for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 impl Symbol {
     pub fn new(id: u32) -> Self {
