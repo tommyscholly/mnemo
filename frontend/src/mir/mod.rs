@@ -24,6 +24,24 @@ pub enum Ty {
     Record(Vec<Ty>),
 }
 
+impl Ty {
+    pub fn bytes(&self) -> usize {
+        match self {
+            Ty::Bool => 1,
+            Ty::Char => 1,
+            Ty::Int => 4,
+            Ty::Unit => 0,
+            Ty::Array(ty, len) => ty.bytes() * *len,
+            Ty::DynArray(ty) => ty.bytes(),
+            Ty::Tuple(tys) => tys.iter().map(|t| t.bytes()).sum(),
+            Ty::Ptr(_) => 4,
+            // this just returns the size of the largest field, not including the tag byte
+            Ty::TaggedUnion(tags_tys) => tags_tys.iter().map(|(tag, ty)| ty.bytes()).max().unwrap(),
+            Ty::Record(tys) => tys.iter().map(|t| t.bytes()).sum(),
+        }
+    }
+}
+
 impl Display for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

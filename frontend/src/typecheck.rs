@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
+    Ctx,
     ast::{
         self, AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Module,
         Params, Pat, PatKind, Region, Signature, SignatureInner, Stmt, StmtKind, Type, TypeKind,
@@ -40,6 +41,7 @@ impl Diagnostic for TypeError {
 
 #[derive(Debug)]
 pub enum TypeErrorKind {
+    MissingMainFunction,
     ExpectedType {
         expected: TypeKind,
         found: TypeKind,
@@ -65,13 +67,14 @@ pub enum TypeErrorKind {
     UnknownSymbol(Symbol),
 }
 
-pub struct TypecheckCtx {
+pub struct TypecheckCtx<'a> {
+    front_ctx: &'a mut Ctx,
     type_map: HashMap<Symbol, Type>,
     function_sigs: HashMap<Symbol, Signature>,
 }
 
-impl TypecheckCtx {
-    fn new() -> Self {
+impl<'a> TypecheckCtx<'a> {
+    fn new(ctx: &'a mut Ctx) -> Self {
         let mut function_sigs = HashMap::new();
 
         // Register built-in functions
@@ -91,6 +94,7 @@ impl TypecheckCtx {
         // );
 
         Self {
+            front_ctx: ctx,
             type_map: HashMap::new(),
             function_sigs,
         }
@@ -515,12 +519,30 @@ impl Typecheck for Module {
             decl.typecheck(ctx)?;
         }
 
+        let mut found_main = false;
+        for function in ctx.function_sigs.keys() {
+            let function_name = ctx.front_ctx.resolve(*function);
+
+            if function_name == "main" {
+                ctx.front_ctx.update(*function, "__entry");
+                found_main = true;
+            }
+        }
+
+        #[cfg(not(test))]
+        if !found_main {
+            return Err(TypeError::new(
+                TypeErrorKind::MissingMainFunction,
+                DUMMY_SPAN,
+            ));
+        }
+
         Ok(())
     }
 }
 
-pub fn typecheck(module: &mut Module) -> TypecheckResult<()> {
-    let mut ctx = TypecheckCtx::new();
+pub fn typecheck(ctx: &mut Ctx, module: &mut Module) -> TypecheckResult<()> {
+    let mut ctx = TypecheckCtx::new(ctx);
     module.typecheck(&mut ctx)
 }
 
@@ -550,7 +572,7 @@ mod tests {
     fn typecheck_src(src: &str) -> TypecheckResult<Module> {
         let (mut ctx, tokens) = tokenify(src);
         let mut module = parseify(&mut ctx, tokens);
-        typecheck(&mut module)?;
+        typecheck(&mut ctx, &mut module)?;
         Ok(module)
     }
 

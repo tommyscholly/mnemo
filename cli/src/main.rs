@@ -19,7 +19,7 @@ fn main() {
         }
     };
 
-    module.visualize(0);
+    // module.visualize(0);
 
     codegen(CodegenBackend::LLVM, module, ctx).unwrap();
 }

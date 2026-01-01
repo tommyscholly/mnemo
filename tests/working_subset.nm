@@ -7,8 +7,8 @@ main :: () {
     array := [2]{ 1, 2 }
 
     inline_record : { a : int, b : int }= { a := 1, b := 2 }
-    // inline_some : Some(int) | None = Some(1)
-    // inline_none : Some(int) | None = None
+    inline_some : Some(int) | None = Some(1)
+    inline_none : Some(int) | None = None
 
     fmt_string := make_fmt_str()
     printf(fmt_string, typed_int)

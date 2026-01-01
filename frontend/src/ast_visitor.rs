@@ -30,6 +30,8 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
                     let adts = &variant.adts;
                     let variant_ty = if adts.len() == 1 {
                         ast_type_to_mir_type(&adts[0].node)
+                    } else if adts.is_empty() {
+                        mir::Ty::Unit
                     } else {
                         let tys = adts
                             .iter()
@@ -516,7 +518,7 @@ mod tests {
 
     fn parseify(ctx: &mut Ctx, tokens: VecDeque<Spanned<crate::lex::Token>>) -> Module {
         let mut module = parse::parse(ctx, tokens).unwrap();
-        typecheck::typecheck(&mut module).unwrap();
+        typecheck::typecheck(ctx, &mut module).unwrap();
         module
     }
 

@@ -100,9 +100,18 @@ impl<'ctx> Llvm<'ctx> {
                 ctx.struct_type(&field_tys, false).as_basic_type_enum()
             }
             mir::Ty::TaggedUnion(_) => {
-                unimplemented!()
+                let union_size = ty.bytes();
+
+                let tag_ty = ctx.i8_type().as_basic_type_enum();
+                let payload_ty = ctx
+                    .i8_type()
+                    .array_type(union_size as u32)
+                    .as_basic_type_enum();
+
+                ctx.struct_type(&[tag_ty, payload_ty], false)
+                    .as_basic_type_enum()
             }
-            _ => todo!(),
+            ty => panic!("unimplemented type {:?}", ty),
         }
     }
 
@@ -229,6 +238,26 @@ impl<'ctx> Llvm<'ctx> {
                         }
 
                         struct_ptr.as_basic_value_enum()
+                    }
+                    AllocKind::Variant(tag, payload_ty) => {
+                        let tag_ty = self.ctx().i8_type().as_basic_type_enum();
+                        println!("payload_ty: {:?}", payload_ty);
+                        let variant_ty = match payload_ty {
+                            mir::Ty::Unit => self.ctx().struct_type(&[tag_ty], false),
+                            _ => {
+                                let payload_ty =
+                                    Self::basic_type_to_llvm_basic_type(self.ctx(), payload_ty);
+                                self.ctx().struct_type(&[tag_ty, payload_ty], false)
+                            }
+                        };
+
+                        let variant_ptr =
+                            self.builder.build_alloca(variant_ty, "variant_alloca")?;
+
+                        let tag_val = self.ctx().i8_type().const_int(*tag as u64, false);
+                        self.builder.build_store(variant_ptr, tag_val)?;
+
+                        variant_ptr.as_basic_value_enum()
                     }
                     a => panic!("unimplemented alloc kind {:?}", a),
                 }
@@ -404,6 +433,21 @@ impl<'ctx> Llvm<'ctx> {
         Ok(())
     }
 
+    fn wrap_main(&self) -> Result<()> {
+        let actual_main = self.module.get_function("__entry").unwrap();
+
+        let fn_ty = self.ctx().i32_type().fn_type(&[], false);
+        let fn_val = self.module.add_function("main", fn_ty, None);
+        let entry_block = self.ctx().append_basic_block(fn_val, "entry");
+
+        self.builder.position_at_end(entry_block);
+        self.builder.build_call(actual_main, &[], "_")?;
+        self.builder
+            .build_return(Some(&self.ctx().i32_type().const_zero()))?;
+
+        Ok(())
+    }
+
     fn output(self) {
         let triple = TargetMachine::get_default_triple();
 
@@ -427,6 +471,8 @@ impl<'ctx> Compiler for Llvm<'ctx> {
         for function in module.functions {
             self.compile_function(function, &ctx)?;
         }
+
+        self.wrap_main()?;
 
         self.module.print_to_stderr();
         self.module.verify().unwrap();

@@ -38,4 +38,8 @@ impl Ctx {
     pub fn resolve(&self, sym: Symbol) -> &str {
         &self.strings[sym.0 as usize]
     }
+
+    pub fn update(&mut self, sym: Symbol, s: &str) {
+        self.strings[sym.0 as usize] = s.to_string();
+    }
 }

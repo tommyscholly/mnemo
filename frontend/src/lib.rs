@@ -37,7 +37,7 @@ pub fn do_frontend(file: &str) -> Result<(mir::Module, Ctx), String> {
 
     let mut module = parse::parse(&mut ctx, tokens).map_err(|e| e.format(&source_map))?;
 
-    typecheck::typecheck(&mut module).map_err(|e| e.format(&source_map))?;
+    typecheck::typecheck(&mut ctx, &mut module).map_err(|e| e.format(&source_map))?;
 
     let mut ast_visitor = AstToMIR::new(&ctx);
     ast_visitor.visit_module(module);
