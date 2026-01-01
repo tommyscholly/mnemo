@@ -7,6 +7,10 @@ use frontend::visualize::MIRVisualizer;
 #[command(author, version)]
 struct Options {
     file: String,
+    #[arg(short, long, default_value = "LLVM")]
+    backend: CodegenBackend,
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 fn main() {
@@ -19,7 +23,9 @@ fn main() {
         }
     };
 
-    // module.visualize(0);
+    if options.verbose {
+        module.visualize(0);
+    }
 
-    codegen(CodegenBackend::LLVM, module, ctx).unwrap();
+    codegen(CodegenBackend::LLVM, module, ctx, options.verbose).unwrap();
 }

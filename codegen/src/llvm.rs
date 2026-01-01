@@ -241,7 +241,6 @@ impl<'ctx> Llvm<'ctx> {
                     }
                     AllocKind::Variant(tag, payload_ty) => {
                         let tag_ty = self.ctx().i8_type().as_basic_type_enum();
-                        println!("payload_ty: {:?}", payload_ty);
                         let variant_ty = match payload_ty {
                             mir::Ty::Unit => self.ctx().struct_type(&[tag_ty], false),
                             _ => {
@@ -463,7 +462,7 @@ impl<'ctx> Llvm<'ctx> {
 }
 
 impl<'ctx> Compiler for Llvm<'ctx> {
-    fn compile(mut self, module: mir::Module, ctx: FrontendCtx) -> Result<()> {
+    fn compile(mut self, module: mir::Module, ctx: FrontendCtx, debug: bool) -> Result<()> {
         for extern_ in module.externs {
             self.compile_extern(extern_)?;
         }
@@ -474,7 +473,10 @@ impl<'ctx> Compiler for Llvm<'ctx> {
 
         self.wrap_main()?;
 
-        self.module.print_to_stderr();
+        if debug {
+            self.module.print_to_stderr();
+        }
+
         self.module.verify().unwrap();
 
         self.output();
@@ -482,11 +484,11 @@ impl<'ctx> Compiler for Llvm<'ctx> {
         Ok(())
     }
 }
-pub fn compile(module: mir::Module, ctx: FrontendCtx) -> Result<()> {
+pub fn compile(module: mir::Module, ctx: FrontendCtx, debug: bool) -> Result<()> {
     let context = Context::create();
 
     let llvm = Llvm::new(&context);
-    llvm.compile(module, ctx)?;
+    llvm.compile(module, ctx, debug)?;
 
     Ok(())
 }

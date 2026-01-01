@@ -126,6 +126,7 @@ name = "codegen"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "frontend",
  "inkwell",
  "llvm-sys",
