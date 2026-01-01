@@ -27,7 +27,7 @@ pub fn do_frontend(file: &str) -> Result<(mir::Module, Ctx), String> {
 
     let source_map = SourceMap::new(contents.clone());
 
-    let mut ctx = Ctx::new();
+    let mut ctx = Ctx::default();
     // TODO: error handling and avoid the extra map allocation here by passing the direct iterator
     // to the parser
     // possibly use a RWLock on the ctx to share it mutably

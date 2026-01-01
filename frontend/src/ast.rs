@@ -17,7 +17,7 @@ pub struct RecordField {
     pub ty: Option<Type>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Clone)]
 pub struct VariantField {
     pub name: Spanned<Symbol>,
     // enums can have associated data of N types, or just be single names
@@ -25,6 +25,16 @@ pub struct VariantField {
     // ADTEnum :: { One(int), Two(int, int), Foo(T), Bar(T) }
     pub adts: Vec<Type>,
 }
+
+impl PartialEq for VariantField {
+    fn eq(&self, other: &Self) -> bool {
+        let adts = self.adts.iter().map(|t| &t.node).collect::<Vec<_>>();
+        let other_adts = other.adts.iter().map(|t| &t.node).collect::<Vec<_>>();
+        self.name.node == other.name.node && adts == other_adts
+    }
+}
+
+impl Eq for VariantField {}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TypeAliasDefinition {

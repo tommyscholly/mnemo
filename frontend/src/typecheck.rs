@@ -1,15 +1,15 @@
 #![allow(unused)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     ast::{
         self, AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Module,
         Params, Pat, PatKind, Region, Signature, SignatureInner, Stmt, StmtKind, Type, TypeKind,
-        ValueKind,
+        ValueKind, VariantField,
     },
     ctx::Symbol,
-    span::{Diagnostic, DUMMY_SPAN, Span, Spanned},
+    span::{DUMMY_SPAN, Diagnostic, Span, Spanned},
 };
 
 #[derive(Debug)]
@@ -44,10 +44,23 @@ pub enum TypeErrorKind {
         expected: TypeKind,
         found: TypeKind,
     },
+    VariantMismatch {
+        expected: Vec<VariantField>,
+        found: VariantField,
+    },
     FnTypeExpected,
     SignatureMismatch {
         expected: Box<SignatureInner>,
         found: Box<SignatureInner>,
+    },
+    RecordFieldMissing {
+        field_name: Symbol,
+        declared_fields: Vec<Symbol>,
+    },
+    RecordFieldMismatch {
+        field_name: Symbol,
+        expected: TypeKind,
+        found: TypeKind,
     },
     UnknownSymbol(Symbol),
 }
@@ -133,6 +146,19 @@ impl ResolveType for Expr {
 
                         // here we resolve the tuple types if they were not provided by a type hint
                         AllocKind::Tuple(types)
+                    }
+                    AllocKind::Variant(variant_name) => {
+                        let adts = elements.iter().map(|e| e.resolve_type(ctx)).collect();
+
+                        let ty = TypeKind::Variant(vec![VariantField {
+                            name: Spanned::default(*variant_name),
+                            adts,
+                        }]);
+
+                        return Type::synthetic(ty);
+                    }
+                    AllocKind::Record(fields) => {
+                        return Type::synthetic(TypeKind::Record(fields.clone()));
                     }
                     _ => kind.clone(),
                 };
@@ -239,12 +265,110 @@ impl Typecheck for Expr {
                                 .all(|e| e.resolve_type(ctx).node == **ty_kind)
                         );
                     }
-                    _ => todo!()
+                    AllocKind::Record(fields) => {
+                        assert_eq!(elements.len(), fields.len());
+                        for (field, elem) in fields.iter_mut().zip(elements.iter()) {
+                            let elem_ty = elem.resolve_type(ctx);
+
+                            match &field.ty {
+                                Some(ty) => {
+                                    assert_eq!(elem_ty.node, ty.node);
+                                }
+                                None => {
+                                    field.ty = Some(elem_ty);
+                                }
+                            }
+                        }
+                    }
+                    AllocKind::Variant(variant_name) => {
+                        // TOOD: is there any variant to check here?
+                    }
+                    _ => todo!(),
                 }
                 Ok(())
             }
         }
     }
+}
+
+fn structural_typecheck(
+    expr_ty: &TypeKind,
+    declared_ty: &TypeKind,
+    declared_ty_span: Span,
+) -> TypecheckResult<()> {
+    match (expr_ty, declared_ty) {
+        (TypeKind::Variant(expr_variant), TypeKind::Variant(declared_variants)) => {
+            // SAFETY: expr variants will only have one element
+            let expr_variant = expr_variant.first().unwrap();
+            if !declared_variants.contains(expr_variant) {
+                return Err(TypeError::new(
+                    TypeErrorKind::VariantMismatch {
+                        expected: declared_variants.clone(),
+                        found: expr_variant.clone(),
+                    },
+                    declared_ty_span,
+                ));
+            }
+        }
+        // we ensure that the declared fields, which is the type annotation, is a subset of the
+        // actual expression fields
+        // for instance, if we have a function that takes in a record { a: int, b: int }, the expr
+        // fields may be { a: int, b: int, c: int } but could not be { a: int }
+        // expr <: declared_fields, or in this example, { a: int, b: int, c: int } <: { a: int, b: int }
+        (TypeKind::Record(expr_fields), TypeKind::Record(declared_fields)) => {
+            let expr_field_set: HashMap<u32, TypeKind> = expr_fields
+                .iter()
+                .map(|f| (f.name.0, f.ty.as_ref().unwrap().node.clone()))
+                .collect();
+
+            let declared_field_set: HashMap<u32, TypeKind> = declared_fields
+                .iter()
+                .map(|f| (f.name.0, f.ty.as_ref().unwrap().node.clone()))
+                .collect();
+
+            // ensure that all the declared fields are present in the expression
+            for (field_name, field_ty) in &declared_field_set {
+                if !expr_field_set.contains_key(field_name) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::RecordFieldMissing {
+                            field_name: Symbol(*field_name),
+                            declared_fields: declared_field_set
+                                .keys()
+                                .cloned()
+                                .map(Into::into)
+                                .collect(),
+                        },
+                        declared_ty_span,
+                    ));
+                }
+
+                if expr_field_set[field_name] != declared_field_set[field_name] {
+                    return Err(TypeError::new(
+                        TypeErrorKind::RecordFieldMismatch {
+                            field_name: Symbol(*field_name),
+                            expected: declared_field_set[field_name].clone(),
+                            found: field_ty.clone(),
+                        },
+                        declared_ty_span,
+                    ));
+                }
+            }
+        }
+
+        _ => {
+            if declared_ty != expr_ty {
+                return Err(TypeError::new(
+                    TypeErrorKind::ExpectedType {
+                        expected: declared_ty.clone(),
+                        found: expr_ty.clone(),
+                    },
+                    declared_ty_span,
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 impl Typecheck for Stmt {
@@ -255,15 +379,11 @@ impl Typecheck for Stmt {
                 let expr_ty = expr.resolve_type(ctx);
 
                 if let Some(declared_ty) = ty {
-                    if declared_ty.node != expr_ty.node {
-                        return Err(TypeError::new(
-                            TypeErrorKind::ExpectedType {
-                                expected: declared_ty.node.clone(),
-                                found: expr_ty.node,
-                            },
-                            expr.span.clone(),
-                        ));
-                    }
+                    structural_typecheck(
+                        &expr_ty.node,
+                        &declared_ty.node,
+                        declared_ty.span.clone(),
+                    )?;
                 } else {
                     *ty = Some(expr_ty.clone());
                 }
@@ -418,7 +538,7 @@ mod tests {
     use super::*;
 
     fn tokenify(s: &str) -> (Ctx, VecDeque<Spanned<crate::lex::Token>>) {
-        let mut ctx = Ctx::new();
+        let mut ctx = Ctx::default();
         let tokens = lex::tokenize(&mut ctx, s).map(|t| t.unwrap()).collect();
         (ctx, tokens)
     }
@@ -677,5 +797,63 @@ mod tests {
 
         let err = result.unwrap_err();
         assert!(matches!(err.kind, TypeErrorKind::UnknownSymbol(_)));
+    }
+
+    #[test]
+    fn test_typecheck_variant_type() {
+        let src = "foo :: (): int { x := None }";
+        let result = typecheck_src(src);
+        assert!(result.is_ok());
+
+        let module = result.unwrap();
+        let DeclKind::Procedure { block, .. } = &module.declarations[0].node else {
+            panic!("expected procedure");
+        };
+
+        let StmtKind::ValDec { expr, .. } = &block.node.stmts[0].node else {
+            panic!("expected val dec");
+        };
+
+        assert!(matches!(
+            &expr.node,
+            ExprKind::Allocation {
+                kind: AllocKind::Variant(variant_name),
+                elements,..
+
+            } if *variant_name == Symbol(2) && elements.is_empty()
+        ));
+    }
+
+    #[test]
+    fn test_typecheck_variant_type_with_args() {
+        let src = "foo :: (): int { x : Some(int) | None = Some(1) }";
+        let result = typecheck_src(src);
+        assert!(result.is_ok());
+
+        let module = result.unwrap();
+        let DeclKind::Procedure { block, .. } = &module.declarations[0].node else {
+            panic!("expected procedure");
+        };
+
+        let StmtKind::ValDec { expr, .. } = &block.node.stmts[0].node else {
+            panic!("expected val dec");
+        };
+
+        eprintln!("{:#?}", expr);
+        assert!(matches!(
+            &expr.node,
+            ExprKind::Allocation {
+                kind: AllocKind::Variant(variant_name),
+                elements,..
+
+            } if *variant_name == Symbol(2) && elements.len() == 1 && elements[0].node == ExprKind::Value(ValueKind::Int(1))
+        ));
+    }
+
+    #[test]
+    fn test_typecheck_subtyping_record() {
+        let src = "foo :: () { x : { a: int } = { a := 1, b := 2 } }";
+        let result = typecheck_src(src);
+        assert!(result.is_ok());
     }
 }

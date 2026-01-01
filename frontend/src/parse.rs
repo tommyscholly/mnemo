@@ -563,6 +563,24 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
             let span = caret_span.merge(&ty.span);
             Spanned::new(TypeKind::Ptr(Box::new(ty.node)), span)
         }
+        Some(Token::LBrace) => {
+            let fields = extract_typedef_fields(tokens)?;
+            let record_fields = parse_record_fields(ctx, fields);
+
+            let start_span = record_fields
+                .first()
+                .map(|f| f.ty.as_ref().unwrap().span.clone())
+                .unwrap();
+
+            let end_span = record_fields
+                .last()
+                .map(|f| f.ty.as_ref().unwrap().span.clone())
+                .unwrap();
+
+            let span = start_span.merge(&end_span);
+
+            Spanned::new(TypeKind::Record(record_fields), span)
+        }
         _ => {
             return Ok(None);
         }
@@ -900,7 +918,7 @@ mod tests {
     use crate::{ast::TypeAliasDefinition, ctx::Symbol, lex};
 
     fn tokenify(s: &str) -> (Ctx, VecDeque<SpannedToken>) {
-        let mut ctx = Ctx::new();
+        let mut ctx = Ctx::default();
         let tokens = lex::tokenize(&mut ctx, s).map(|t| t.unwrap()).collect();
         (ctx, tokens)
     }
@@ -920,7 +938,7 @@ mod tests {
         decs
     }
 
-    fn assert_decl_is_constant(decl: &Decl, expected_name_id: i32, expected_has_ty: bool) {
+    fn assert_decl_is_constant(decl: &Decl, expected_name_id: u32, expected_has_ty: bool) {
         let DeclKind::Constant { name, ty, .. } = &decl.node else {
             panic!("expected Constant declaration");
         };
@@ -928,7 +946,7 @@ mod tests {
         assert_eq!(ty.is_some(), expected_has_ty);
     }
 
-    fn assert_decl_is_procedure(decl: &Decl, expected_name_id: i32, expected_param_count: usize) {
+    fn assert_decl_is_procedure(decl: &Decl, expected_name_id: u32, expected_param_count: usize) {
         let DeclKind::Procedure { name, sig, .. } = &decl.node else {
             panic!("expected Procedure declaration");
         };
@@ -936,7 +954,7 @@ mod tests {
         assert_eq!(sig.node.params.patterns.len(), expected_param_count);
     }
 
-    fn assert_decl_is_typedef(decl: &Decl, expected_name_id: i32) {
+    fn assert_decl_is_typedef(decl: &Decl, expected_name_id: u32) {
         let DeclKind::TypeDef { name, .. } = &decl.node else {
             panic!("expected TypeDef declaration");
         };

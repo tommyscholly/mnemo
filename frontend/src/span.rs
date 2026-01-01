@@ -13,6 +13,10 @@ impl<T> Spanned<T> {
         Self { node, span }
     }
 
+    pub fn default(node: T) -> Self {
+        Self::new(node, DUMMY_SPAN)
+    }
+
     pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Spanned<U> {
         Spanned {
             node: f(self.node),

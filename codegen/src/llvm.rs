@@ -8,17 +8,12 @@ use anyhow::Result;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::{Context, ContextRef};
-use inkwell::intrinsics::Intrinsic;
 use inkwell::module::{Linkage, Module};
 use inkwell::targets::{
-    ByteOrdering, CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
-use inkwell::types::{
-    AnyType, AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType,
-};
-use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue,
-};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::{AddressSpace, OptimizationLevel};
 
 use crate::Compiler;
@@ -43,7 +38,7 @@ impl<'ctx> FunctionLocalInfo<'ctx> {
     }
 }
 
-pub struct LLVM<'ctx> {
+pub struct Llvm<'ctx> {
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     function_locals: HashMap<mir::LocalId, FunctionLocalInfo<'ctx>>,
@@ -51,7 +46,7 @@ pub struct LLVM<'ctx> {
     target_machine: TargetMachine,
 }
 
-impl<'ctx> LLVM<'ctx> {
+impl<'ctx> Llvm<'ctx> {
     fn new(ctx: &'ctx Context) -> Self {
         let module = ctx.create_module("mnemo");
         let builder = ctx.create_builder();
@@ -148,8 +143,8 @@ impl<'ctx> LLVM<'ctx> {
     fn compile_rvalue(
         &self,
         rvalue: &mir::RValue,
-        llvm_fn: &FunctionValue<'ctx>,
-        ctx: &FrontendCtx,
+        _llvm_fn: &FunctionValue<'ctx>,
+        _ctx: &FrontendCtx,
     ) -> Result<BasicValueEnum<'ctx>> {
         let int_val = match rvalue {
             mir::RValue::Use(operand) => self.compile_operand(operand)?,
@@ -394,7 +389,7 @@ impl<'ctx> LLVM<'ctx> {
     }
 }
 
-impl<'ctx> Compiler for LLVM<'ctx> {
+impl<'ctx> Compiler for Llvm<'ctx> {
     fn compile(mut self, module: mir::Module, ctx: FrontendCtx) -> Result<()> {
         for extern_ in module.externs {
             self.compile_extern(extern_)?;
@@ -415,7 +410,7 @@ impl<'ctx> Compiler for LLVM<'ctx> {
 pub fn compile(module: mir::Module, ctx: FrontendCtx) -> Result<()> {
     let context = Context::create();
 
-    let llvm = LLVM::new(&context);
+    let llvm = Llvm::new(&context);
     llvm.compile(module, ctx)?;
 
     Ok(())

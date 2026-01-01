@@ -18,10 +18,48 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
 
             AllocKind::DynArray(ty) => mir::Ty::DynArray(Box::new(ast_type_to_mir_type(ty))),
             AllocKind::Array(ty, len) => mir::Ty::Array(Box::new(ast_type_to_mir_type(ty)), *len),
-            _ => todo!()
+            AllocKind::Record(fields) => {
+                let field_tys = fields
+                    .iter()
+                    .map(|f| {
+                        ast_type_to_mir_type(
+                            &f.ty
+                                .as_ref()
+                                .expect("all field types should be resolved by now")
+                                .node,
+                        )
+                    })
+                    .collect();
+                mir::Ty::Record(field_tys)
+            }
+            _ => todo!(),
         },
         TypeKind::Ptr(ty) => mir::Ty::Ptr(Box::new(ast_type_to_mir_type(ty))),
         TypeKind::Char => mir::Ty::Char,
+        TypeKind::Variant(variants) => {
+            let mir_variant_tys = variants
+                .iter()
+                .map(|variant| {
+                    let adts = &variant.adts;
+                    let variant_ty = if adts.len() == 1 {
+                        ast_type_to_mir_type(&adts[0].node)
+                    } else {
+                        let tys = adts
+                            .iter()
+                            .map(|tk| ast_type_to_mir_type(&tk.node))
+                            .collect();
+
+                        mir::Ty::Tuple(tys)
+                    };
+
+                    let union_tag = variant.name.node.0;
+
+                    (union_tag as u8, variant_ty)
+                })
+                .collect();
+
+            mir::Ty::TaggedUnion(mir_variant_tys)
+        }
         _ => todo!(),
     }
 }
@@ -45,37 +83,40 @@ pub struct AstToMIR<'a> {
     function_table: HashMap<Symbol, Function>,
     constants: HashMap<Symbol, mir::RValue>,
     phi_functions_to_generate: BTreeMap<mir::LocalId, Vec<mir::LocalId>>,
+    variants: HashMap<u8, mir::Ty>,
     externs: Vec<mir::Extern>,
 }
 
 impl<'a> AstToMIR<'a> {
     pub fn new(ctx: &'a Ctx) -> Self {
-        let function_table = HashMap::new();
-        // function_table.insert(
-        //     Symbol(-1),
-        //     Function {
-        //         function_id: 0,
-        //         blocks: Vec::new(),
-        //         parameters: 1,
-        //         return_ty: mir::Ty::Unit,
-        //         locals: Vec::new(),
-        //     },
-        // );
-
         Self {
             ctx,
             current_function: None,
             current_block: 0,
             symbol_table: HashMap::new(),
-            function_table,
+            function_table: HashMap::new(),
             constants: HashMap::new(),
             phi_functions_to_generate: BTreeMap::new(),
+            variants: HashMap::new(),
             externs: Vec::new(),
+        }
+    }
+
+    fn update_type_information(&mut self, ty: &mir::Ty) {
+        #[allow(clippy::single_match)]
+        match ty {
+            mir::Ty::TaggedUnion(tags_tys) => {
+                for (tag, ty) in tags_tys {
+                    self.variants.insert(*tag, ty.clone());
+                }
+            }
+            _ => {}
         }
     }
 
     fn new_local(&mut self, ty: &TypeKind) -> mir::LocalId {
         let ty = ast_type_to_mir_type(ty);
+        self.update_type_information(&ty);
         let current_function = self.get_current_function();
         let local_id = current_function.locals.len();
         let local = mir::Local::new(local_id, ty);
@@ -225,7 +266,27 @@ impl AstVisitor for AstToMIR<'_> {
                         let ty = ast_type_to_mir_type(&ty);
                         mir::RValue::Alloc(mir::AllocKind::DynArray(ty), ops)
                     }
-                    _ => todo!()
+                    AllocKind::Record(fields) => {
+                        let tys = fields
+                            .iter()
+                            .map(|f| {
+                                ast_type_to_mir_type(
+                                    &f.ty
+                                        .as_ref()
+                                        .expect("all field types should be resolved by now")
+                                        .node,
+                                )
+                            })
+                            .collect();
+
+                        mir::RValue::Alloc(mir::AllocKind::Record(tys), ops)
+                    }
+                    AllocKind::Variant(variant_name) => {
+                        let variant_id = variant_name.0 as u8;
+                        let ty = self.variants.get(&variant_id).unwrap();
+
+                        mir::RValue::Alloc(mir::AllocKind::Variant(variant_id, ty.clone()), ops)
+                    }
                 }
             }
         }
@@ -447,7 +508,7 @@ mod tests {
     use super::*;
 
     fn tokenify(s: &str) -> (Ctx, VecDeque<Spanned<crate::lex::Token>>) {
-        let mut ctx = Ctx::new();
+        let mut ctx = Ctx::default();
         let tokens = lex::tokenize(&mut ctx, s).map(|t| t.unwrap()).collect();
         (ctx, tokens)
     }

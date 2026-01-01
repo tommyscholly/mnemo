@@ -20,6 +20,8 @@ pub enum Ty {
     DynArray(Box<Ty>),
     Tuple(Vec<Ty>),
     Ptr(Box<Ty>),
+    TaggedUnion(Vec<(u8, Ty)>),
+    Record(Vec<Ty>),
 }
 
 impl Display for Ty {
@@ -40,6 +42,24 @@ impl Display for Ty {
                     .join(", ")
             ),
             Ty::Ptr(ty) => write!(f, "^{}", ty),
+            Ty::TaggedUnion(tags_tys) => {
+                let tags_tys_str = tags_tys
+                    .iter()
+                    .map(|(tag, ty)| format!("{}:<{}>", tag, ty))
+                    .collect::<Vec<String>>()
+                    .join("|");
+
+                write!(f, "{}", tags_tys_str)
+            }
+
+            Ty::Record(tys) => write!(
+                f,
+                "{{ {} }}",
+                tys.iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
         }
     }
 }
@@ -55,6 +75,8 @@ pub enum AllocKind {
     Array(Ty),
     DynArray(Ty),
     Tuple(Vec<Ty>),
+    Record(Vec<Ty>),
+    Variant(u8, Ty),
 }
 
 impl Display for AllocKind {
@@ -71,6 +93,16 @@ impl Display for AllocKind {
                 write!(f, "{}", ty_str)
             }
             AllocKind::DynArray(ty) => write!(f, "dyn_array<{}>", ty),
+            AllocKind::Record(tys) => {
+                let ty_str = tys
+                    .iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+
+                write!(f, "{{{}}}", ty_str)
+            }
+            AllocKind::Variant(tag, ty) => write!(f, "Variant({})<{}>", tag, ty),
         }
     }
 }
