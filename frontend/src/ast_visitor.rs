@@ -18,21 +18,8 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
 
             AllocKind::DynArray(ty) => mir::Ty::DynArray(Box::new(ast_type_to_mir_type(ty))),
             AllocKind::Array(ty, len) => mir::Ty::Array(Box::new(ast_type_to_mir_type(ty)), *len),
-            AllocKind::Record(fields) => {
-                let field_tys = fields
-                    .iter()
-                    .map(|f| {
-                        ast_type_to_mir_type(
-                            &f.ty
-                                .as_ref()
-                                .expect("all field types should be resolved by now")
-                                .node,
-                        )
-                    })
-                    .collect();
-                mir::Ty::Record(field_tys)
-            }
-            _ => todo!(),
+            AllocKind::Record(_) => unreachable!(),
+            AllocKind::Variant(_) => unreachable!(),
         },
         TypeKind::Ptr(ty) => mir::Ty::Ptr(Box::new(ast_type_to_mir_type(ty))),
         TypeKind::Char => mir::Ty::Char,
@@ -59,6 +46,20 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
                 .collect();
 
             mir::Ty::TaggedUnion(mir_variant_tys)
+        }
+        TypeKind::Record(fields) => {
+            let field_tys = fields
+                .iter()
+                .map(|f| {
+                    ast_type_to_mir_type(
+                        &f.ty
+                            .as_ref()
+                            .expect("all field types should be resolved by now")
+                            .node,
+                    )
+                })
+                .collect();
+            mir::Ty::Record(field_tys)
         }
         _ => todo!(),
     }

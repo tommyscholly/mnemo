@@ -91,6 +91,17 @@ impl<'ctx> Llvm<'ctx> {
                 ty.array_type(*len as u32).as_basic_type_enum()
             }
             mir::Ty::Ptr(_) => ctx.ptr_type(AddressSpace::default()).as_basic_type_enum(),
+            mir::Ty::Record(tys) => {
+                let field_tys: Vec<BasicTypeEnum<'ctx>> = tys
+                    .iter()
+                    .map(|t| Self::basic_type_to_llvm_basic_type(ctx, t))
+                    .collect();
+
+                ctx.struct_type(&field_tys, false).as_basic_type_enum()
+            }
+            mir::Ty::TaggedUnion(_) => {
+                unimplemented!()
+            }
             _ => todo!(),
         }
     }
@@ -196,7 +207,30 @@ impl<'ctx> Llvm<'ctx> {
 
                         array_ptr.as_basic_value_enum()
                     }
-                    _ => todo!(),
+                    AllocKind::Record(fields) => {
+                        let field_tys: Vec<BasicTypeEnum<'ctx>> = fields
+                            .iter()
+                            .map(|ty| Self::basic_type_to_llvm_basic_type(self.ctx(), ty))
+                            .collect();
+
+                        let struct_ty = self.ctx().struct_type(&field_tys, false);
+
+                        let struct_ptr = self.builder.build_alloca(struct_ty, "struct_alloca")?;
+
+                        for (i, operand) in operands.iter().take(fields.len()).enumerate() {
+                            let field_alloca = self.builder.build_struct_gep(
+                                struct_ty,
+                                struct_ptr,
+                                i as u32,
+                                "field_alloca",
+                            )?;
+                            self.builder
+                                .build_store(field_alloca, self.compile_operand(operand)?)?;
+                        }
+
+                        struct_ptr.as_basic_value_enum()
+                    }
+                    a => panic!("unimplemented alloc kind {:?}", a),
                 }
             }
         };
@@ -295,11 +329,6 @@ impl<'ctx> Llvm<'ctx> {
         llvm_fn: &FunctionValue<'ctx>,
         ctx: &FrontendCtx,
     ) -> Result<BasicBlock<'ctx>> {
-        println!(
-            "compiling block {} with len {}",
-            block.block_id,
-            self.function_blocks.len()
-        );
         let bb = if self.function_blocks.len() == block.block_id {
             self.function_blocks[block.block_id - 1]
         } else {
