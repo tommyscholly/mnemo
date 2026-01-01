@@ -65,12 +65,14 @@ pub enum TypeErrorKind {
         found: TypeKind,
     },
     UnknownSymbol(Symbol),
+    UnknownField(Symbol),
     ArgCountMismatch {
         expected: usize,
         found: usize,
     },
     UnknownMethod(Symbol),
     NotCallable,
+    ExpectedRecord,
 }
 
 pub struct TypecheckCtx<'a> {
@@ -129,7 +131,7 @@ impl ResolveType for Expr {
                 lhs_ty
             }
             ExprKind::Call(Call { callee, args: _ }) => {
-                let (callee_sig, _) = resolve_callee_signature(&callee, ctx).unwrap();
+                let (callee_sig, _) = resolve_callee_signature(callee, ctx).unwrap();
                 match callee_sig.node.return_ty.clone() {
                     Some(ty) => ty,
                     None => Type::synthetic(TypeKind::Unit),
@@ -176,7 +178,10 @@ impl ResolveType for Expr {
                 Type::synthetic(TypeKind::Alloc(kind, region_handle))
             }
             ExprKind::FieldAccess(expr, field) => {
-                todo!()
+                let expr_ty = expr.resolve_type(ctx);
+                let field_ty = get_field_type(&expr_ty, *field).unwrap();
+
+                Type::synthetic(field_ty)
             }
         }
     }
@@ -188,15 +193,12 @@ trait Typecheck {
 }
 
 fn type_check_call(call: &mut Call, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-    // First, typecheck all arguments
     for arg in call.args.iter_mut() {
         arg.typecheck(ctx)?;
     }
 
-    // Resolve the callee to a signature
     let (callee_signature, span) = resolve_callee_signature(&call.callee, ctx)?;
 
-    // Check argument count
     let expected_count = callee_signature.node.params.types.len();
     let found_count = call.args.len();
     if expected_count != found_count {
@@ -209,7 +211,6 @@ fn type_check_call(call: &mut Call, ctx: &mut TypecheckCtx) -> TypecheckResult<(
         ));
     }
 
-    // Check argument types
     for (arg, ty) in call
         .args
         .iter()
@@ -263,6 +264,30 @@ pub fn resolve_callee_signature(
                 callee.span.clone(),
             ))
         }
+    }
+}
+
+fn get_field_type(expr_ty: &Type, field: Symbol) -> TypecheckResult<TypeKind> {
+    let type_kind = &expr_ty.node;
+    let field_ty = if let TypeKind::Record(fields) = &expr_ty.node {
+        fields
+            .iter()
+            .find(|f| f.name == field)
+            // SAFETY: field types should be resolved by now
+            .map(|f| f.ty.as_ref().unwrap())
+    } else {
+        return Err(TypeError::new(
+            TypeErrorKind::ExpectedRecord,
+            expr_ty.span.clone(),
+        ));
+    };
+
+    match field_ty {
+        Some(ty) => Ok(ty.node.clone()),
+        None => Err(TypeError::new(
+            TypeErrorKind::UnknownField(field),
+            expr_ty.span.clone(),
+        )),
     }
 }
 
@@ -344,7 +369,11 @@ impl Typecheck for Expr {
                 Ok(())
             }
             ExprKind::FieldAccess(expr, field) => {
-                todo!()
+                expr.typecheck(ctx)?;
+                let expr_ty = expr.resolve_type(ctx);
+                let _field_ty = get_field_type(&expr_ty, *field)?;
+
+                Ok(())
             }
         }
     }

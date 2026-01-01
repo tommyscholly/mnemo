@@ -7,8 +7,12 @@ pub trait MIRVisualizer {
 impl MIRVisualizer for Operand {
     fn visualize(&self, indent: usize) {
         match self {
-            Operand::Local(local_id) => print!("%{local_id}"),
             Operand::Constant(i) => print!("{i}"),
+            Operand::Copy(place) => match &place.kind {
+                PlaceKind::Deref => print!("%{}", place.local),
+                PlaceKind::Field(idx, ty) => print!("{}.{idx}:<{ty}>", place.local),
+                PlaceKind::Index(idx) => print!("{}[{idx}]", place.local),
+            },
         }
     }
 }

@@ -140,6 +140,39 @@ impl<'ctx> Llvm<'ctx> {
         }
     }
 
+    fn load_place(&self, place: &mir::Place) -> Result<BasicValueEnum<'ctx>> {
+        let local = self.function_locals.get(&place.local).unwrap();
+        let load = match &place.kind {
+            mir::PlaceKind::Deref => self
+                .builder
+                .build_load(local.ty, local.alloc, "load")
+                .unwrap()
+                .as_basic_value_enum(),
+            mir::PlaceKind::Field(idx, ty) => {
+                let field_alloca = self.builder.build_struct_gep(
+                    local.ty,
+                    local.alloc,
+                    *idx as u32,
+                    "field_alloca",
+                )?;
+
+                let load_ty = Self::basic_type_to_llvm_basic_type(self.ctx(), ty);
+
+                self.builder
+                    .build_load(
+                        load_ty,
+                        field_alloca,
+                        format!("load_field_{}", idx).as_str(),
+                    )
+                    .unwrap()
+                    .as_basic_value_enum()
+            }
+            mir::PlaceKind::Index(_idx) => todo!(),
+        };
+
+        Ok(load)
+    }
+
     fn compile_operand(&self, operand: &mir::Operand) -> Result<BasicValueEnum<'ctx>> {
         let value = match operand {
             mir::Operand::Constant(c) => self
@@ -147,14 +180,8 @@ impl<'ctx> Llvm<'ctx> {
                 .i32_type()
                 .const_int(*c as u64, false)
                 .as_basic_value_enum(),
-            mir::Operand::Local(local_id) => {
-                let local = self.function_locals.get(local_id).unwrap();
-
-                self.builder
-                    .build_load(local.ty, local.alloc, "load")
-                    .unwrap()
-                    .as_basic_value_enum()
-            }
+            // copies are trivial loads
+            mir::Operand::Copy(place) => self.load_place(place)?,
         };
 
         Ok(value)
@@ -237,7 +264,8 @@ impl<'ctx> Llvm<'ctx> {
                                 .build_store(field_alloca, self.compile_operand(operand)?)?;
                         }
 
-                        struct_ptr.as_basic_value_enum()
+                        self.builder
+                            .build_load(struct_ty, struct_ptr, "struct_load")?
                     }
                     AllocKind::Variant(tag, payload_ty) => {
                         let tag_ty = self.ctx().i8_type().as_basic_type_enum();

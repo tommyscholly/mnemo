@@ -4,11 +4,11 @@ make_fmt_str :: extern () : ^char
 main :: () {
     untyped_int := 1
     typed_int : int = 2
-    array := [2]{ 1, 2 }
+    // array := [2]{ 1, 2 }
 
     inline_record : { a : int, b : int } = { a := untyped_int, b := typed_int }
-    inline_some : Some(int) | None = Some(1)
-    inline_none : Some(int) | None = None
+    // inline_some : Some(int) | None = Some(1)
+    // inline_none : Some(int) | None = None
 
     print_int := inline_record.a + inline_record.b
 

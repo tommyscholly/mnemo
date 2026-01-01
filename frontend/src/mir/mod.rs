@@ -1,6 +1,8 @@
 #![allow(unused)]
 
 pub mod visualize;
+mod graph;
+mod visit;
 
 use std::fmt::Display;
 
@@ -82,10 +84,35 @@ impl Display for Ty {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum PlaceKind {
+    /// array index operations
+    Index(LocalId),
+    /// field idx, and a type for validation
+    Field(usize, Ty),
+    Deref,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+// places are memory locations
+pub struct Place {
+    pub local: LocalId,
+    // we use the place kind to determine where we are looking in the local
+    // for example, if we are looking at a field, we need to know the field index
+    // if we are looking at an array index, we need to know the array index
+    pub kind: PlaceKind,
+}
+
+impl Place {
+    pub fn new(local: LocalId, kind: PlaceKind) -> Self {
+        Self { local, kind }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Operand {
     Constant(i32),
-    Local(LocalId),
+    Copy(Place),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -130,6 +157,18 @@ pub enum RValue {
     Use(Operand),
     BinOp(BinOp, Operand, Operand),
     Alloc(AllocKind, Vec<Operand>),
+}
+
+impl RValue {
+    pub fn place(&self) -> Option<Place> {
+        match self {
+            RValue::Use(op) => match op {
+                Operand::Constant(_) => None,
+                Operand::Copy(p) => Some(p.clone()),
+            },
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

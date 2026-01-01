@@ -87,6 +87,8 @@ pub struct AstToMIR<'a> {
     constants: HashMap<Symbol, mir::RValue>,
     phi_functions_to_generate: BTreeMap<mir::LocalId, Vec<mir::LocalId>>,
     variants: HashMap<u8, mir::Ty>,
+    // store local types so we can resolve field accesses
+    local_types: HashMap<mir::LocalId, TypeKind>,
     externs: Vec<mir::Extern>,
 }
 
@@ -101,6 +103,7 @@ impl<'a> AstToMIR<'a> {
             constants: HashMap::new(),
             phi_functions_to_generate: BTreeMap::new(),
             variants: HashMap::new(),
+            local_types: HashMap::new(),
             externs: Vec::new(),
         }
     }
@@ -118,12 +121,16 @@ impl<'a> AstToMIR<'a> {
     }
 
     fn new_local(&mut self, ty: &TypeKind) -> mir::LocalId {
-        let ty = ast_type_to_mir_type(ty);
-        self.update_type_information(&ty);
         let current_function = self.get_current_function();
         let local_id = current_function.locals.len();
+
+        self.local_types.insert(local_id, ty.clone());
+
+        let ty = ast_type_to_mir_type(ty);
+        self.update_type_information(&ty);
+
         let local = mir::Local::new(local_id, ty);
-        current_function.locals.push(local);
+        self.get_current_function().locals.push(local);
         local_id
     }
 
@@ -163,16 +170,15 @@ impl<'a> AstToMIR<'a> {
 
         match callee_expr {
             ExprKind::Value(ValueKind::Ident(name)) => {
-                if self.function_table.contains_key(name) {
-                    return Some(*name);
-                } else if self
-                    .externs
-                    .iter()
-                    .any(|e| e.name == self.ctx.resolve(*name))
+                if self.function_table.contains_key(name)
+                    || self
+                        .externs
+                        .iter()
+                        .any(|e| e.name == self.ctx.resolve(*name))
                 {
-                    return Some(*name);
+                    Some(*name)
                 } else {
-                    return None;
+                    None
                 }
             }
             ExprKind::FieldAccess(_, method_name) => {
@@ -180,16 +186,15 @@ impl<'a> AstToMIR<'a> {
                 // same as type checking, we will need to switch this for structural impls
                 let name = method_name;
 
-                if self.function_table.contains_key(name) {
-                    return Some(*name);
-                } else if self
-                    .externs
-                    .iter()
-                    .any(|e| e.name == self.ctx.resolve(*name))
+                if self.function_table.contains_key(name)
+                    || self
+                        .externs
+                        .iter()
+                        .any(|e| e.name == self.ctx.resolve(*name))
                 {
-                    return Some(*name);
+                    Some(*name)
                 } else {
-                    return None;
+                    None
                 }
             }
             _ => {
@@ -240,7 +245,12 @@ impl AstVisitor for AstToMIR<'_> {
         match expr.node {
             ExprKind::Value(v) => match v {
                 ValueKind::Int(i) => mir::RValue::Use(mir::Operand::Constant(i)),
-                ValueKind::Ident(i) => mir::RValue::Use(mir::Operand::Local(self.symbol_table[&i])),
+                ValueKind::Ident(i) => {
+                    let local_id = self.symbol_table[&i];
+                    let place = mir::Place::new(local_id, mir::PlaceKind::Deref);
+                    let op = mir::Operand::Copy(place);
+                    mir::RValue::Use(op)
+                }
             },
             ExprKind::BinOp { op, lhs, rhs } => {
                 let lhs = self.visit_expr(*lhs);
@@ -251,7 +261,9 @@ impl AstVisitor for AstToMIR<'_> {
                         self.get_current_block()
                             .stmts
                             .push(mir::Statement::Assign(lhs_local, lhs));
-                        mir::Operand::Local(lhs_local)
+
+                        let place = mir::Place::new(lhs_local, mir::PlaceKind::Deref);
+                        mir::Operand::Copy(place)
                     }
                 };
 
@@ -263,7 +275,9 @@ impl AstVisitor for AstToMIR<'_> {
                         self.get_current_block()
                             .stmts
                             .push(mir::Statement::Assign(rhs_local, rhs));
-                        mir::Operand::Local(rhs_local)
+
+                        let place = mir::Place::new(rhs_local, mir::PlaceKind::Deref);
+                        mir::Operand::Copy(place)
                     }
                 };
 
@@ -273,7 +287,10 @@ impl AstVisitor for AstToMIR<'_> {
                 let dest = self.get_current_function().locals.len() - 1;
                 self.call(*callee, args, Some(dest));
 
-                mir::RValue::Use(mir::Operand::Local(dest))
+                let place = mir::Place::new(dest, mir::PlaceKind::Deref);
+                let op = mir::Operand::Copy(place);
+                // this makes an irrelevant copy, from %dest to %dest
+                mir::RValue::Use(op)
             }
             ExprKind::Allocation {
                 kind,
@@ -290,7 +307,9 @@ impl AstVisitor for AstToMIR<'_> {
                             self.get_current_block()
                                 .stmts
                                 .push(mir::Statement::Assign(elem_local, elem));
-                            mir::Operand::Local(elem_local)
+
+                            let place = mir::Place::new(elem_local, mir::PlaceKind::Deref);
+                            mir::Operand::Copy(place)
                         }
                     };
                     ops.push(op);
@@ -335,7 +354,26 @@ impl AstVisitor for AstToMIR<'_> {
                 }
             }
             ExprKind::FieldAccess(expr, field_name) => {
-                todo!()
+                let mir_expr = self.visit_expr(*expr);
+                // SAFETY: we should have type checked this, which means that the expr should be a place
+                let place = mir_expr.place().unwrap();
+                let expr_ty = self.local_types.get(&place.local).unwrap();
+
+                let TypeKind::Record(fields) = expr_ty else {
+                    panic!("expected record type, got {:?}", expr_ty);
+                };
+
+                let (field_idx, field_ty) = fields
+                    .iter()
+                    .enumerate()
+                    .find(|(_, f)| f.name == field_name)
+                    .map(|(idx, f)| (idx, ast_type_to_mir_type(&f.ty.as_ref().unwrap().node)))
+                    .expect("field not found");
+
+                mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
+                    place.local,
+                    mir::PlaceKind::Field(field_idx, field_ty),
+                )))
             }
         }
     }
@@ -499,6 +537,7 @@ impl AstVisitor for AstToMIR<'_> {
                     locals: Vec::new(),
                 };
 
+                self.local_types.clear();
                 self.function_table.insert(name_sym, function);
                 self.current_function = Some(name_sym);
 
@@ -612,7 +651,10 @@ mod tests {
             block_id: 1,
             stmts: vec![mir::Statement::Assign(
                 2,
-                mir::RValue::Use(mir::Operand::Local(0)),
+                mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
+                    0,
+                    mir::PlaceKind::Deref,
+                ))),
             )],
             terminator: mir::Terminator::BrIf(2, 2, 7),
         };
@@ -635,13 +677,16 @@ mod tests {
                 3,
                 mir::RValue::BinOp(
                     lex::BinOp::Add,
-                    mir::Operand::Local(0),
+                    mir::Operand::Copy(mir::Place::new(0, mir::PlaceKind::Deref)),
                     mir::Operand::Constant(1),
                 ),
             )],
             terminator: mir::Terminator::Call {
                 function_name: "bar".to_string(),
-                args: vec![mir::RValue::Use(mir::Operand::Local(0))],
+                args: vec![mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
+                    0,
+                    mir::PlaceKind::Deref,
+                )))],
                 destination: None,
                 target: 4,
             },
@@ -672,13 +717,16 @@ mod tests {
                 4,
                 mir::RValue::BinOp(
                     lex::BinOp::Add,
-                    mir::Operand::Local(1),
+                    mir::Operand::Copy(mir::Place::new(1, mir::PlaceKind::Deref)),
                     mir::Operand::Constant(1),
                 ),
             )],
             terminator: mir::Terminator::Call {
                 function_name: "bar".to_string(),
-                args: vec![mir::RValue::Use(mir::Operand::Local(1))],
+                args: vec![mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
+                    1,
+                    mir::PlaceKind::Deref,
+                )))],
                 destination: None,
                 target: 7,
             },
