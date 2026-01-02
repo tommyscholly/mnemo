@@ -9,20 +9,21 @@ mod span;
 mod typecheck;
 
 pub use ctx::{Ctx, Symbol};
-pub use mir::{Function, visualize};
-pub use span::{Diagnostic, DUMMY_SPAN, SourceMap, Span, SpanExt, Spanned};
 pub use lex::BinOp;
+pub use mir::{Function, visualize};
+pub use span::{Diagnostic, SourceMap, Span, SpanExt, Spanned};
 
 use ast_visitor::{AstToMIR, AstVisitor};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Read;
 
-pub fn do_frontend(file: &str) -> Result<(mir::Module, Ctx), String> {
+pub fn do_frontend(file: &str, output_mir: bool) -> Result<(mir::Module, Ctx), String> {
     let mut file = File::open(file).map_err(|e| format!("failed to open file: {}", e))?;
 
     let mut contents = String::new();
-    file.read_to_string(&mut contents).map_err(|e| format!("failed to read file: {}", e))?;
+    file.read_to_string(&mut contents)
+        .map_err(|e| format!("failed to read file: {}", e))?;
     contents = contents.trim().to_string();
 
     let source_map = SourceMap::new(contents.clone());
@@ -42,5 +43,6 @@ pub fn do_frontend(file: &str) -> Result<(mir::Module, Ctx), String> {
     let mut ast_visitor = AstToMIR::new(&ctx);
     ast_visitor.visit_module(module);
 
-    Ok((ast_visitor.produce_module(), ctx))
+    let module = mir::run_passes(ast_visitor.produce_module(), output_mir);
+    Ok((module, ctx))
 }
