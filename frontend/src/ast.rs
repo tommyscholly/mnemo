@@ -1,3 +1,4 @@
+use crate::Span;
 use crate::ctx::Symbol;
 use crate::lex::BinOp;
 use crate::span::{DUMMY_SPAN, Spanned};
@@ -61,9 +62,12 @@ pub enum TypeKind {
 pub type Type = Spanned<TypeKind>;
 
 impl Type {
-    /// Create an unspanned type (for synthesized/inferred types).
     pub fn synthetic(kind: TypeKind) -> Self {
         Spanned::new(kind, DUMMY_SPAN)
+    }
+
+    pub fn with_span(kind: TypeKind, span: Span) -> Self {
+        Spanned::new(kind, span)
     }
 }
 
@@ -107,6 +111,7 @@ pub enum ExprKind {
     FieldAccess(Box<Expr>, Symbol),
     // a function call that is used in an assignment or declaration
     Call(Call),
+    Index(Box<Expr>, Box<Expr>),
 }
 
 pub type Expr = Spanned<ExprKind>;

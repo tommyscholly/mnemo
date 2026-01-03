@@ -8,7 +8,7 @@ use graphviz_rust::{
 
 use super::visit::visit_block_succs;
 use crate::mir::{
-    domtree::{DomTree, Searchable},
+    domtree::{DomTreeImpl, Searchable},
     *,
 };
 
@@ -86,9 +86,9 @@ impl Searchable<BlockId> for FlowGraph {
     }
 }
 
-impl DomTree<BlockId> for FlowGraph {
+impl DomTreeImpl<BlockId> for FlowGraph {
     fn dom(&self, start: Self::NodeId) -> Option<Self::NodeId> {
-        self.dominators.get(&start).unwrap_or(&None).clone()
+        *self.dominators.get(&start).unwrap_or(&None)
     }
 
     fn set_dom(&mut self, node: Self::NodeId, dom: Option<Self::NodeId>) {

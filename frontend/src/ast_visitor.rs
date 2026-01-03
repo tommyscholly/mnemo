@@ -225,6 +225,20 @@ impl<'a> AstToMIR<'a> {
         self.current_block = next_block_idx;
     }
 
+    fn rvalue_to_local(&mut self, rvalue_ty: mir::Ty, rvalue: mir::RValue) -> mir::LocalId {
+        match rvalue {
+            mir::RValue::Use(mir::Operand::Copy(mir::Place { local, .. })) => local,
+            mir::RValue::Use(mir::Operand::Constant(_)) => {
+                let local_id = self.new_local_with_ty(rvalue_ty);
+                self.get_current_block()
+                    .stmts
+                    .push(mir::Statement::Assign(local_id, rvalue));
+                local_id
+            }
+            _ => todo!(),
+        }
+    }
+
     pub fn produce_module(mut self) -> mir::Module {
         let function_table = std::mem::take(&mut self.function_table);
         let functions = function_table.into_values().collect();
@@ -373,6 +387,20 @@ impl AstVisitor for AstToMIR<'_> {
                 mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
                     place.local,
                     mir::PlaceKind::Field(field_idx, field_ty),
+                )))
+            }
+            ExprKind::Index(expr, index) => {
+                let mir_expr = self.visit_expr(*expr);
+                // SAFETY: we should have type checked this, which means that the expr should be a place
+                let place = mir_expr.place().unwrap();
+
+                let mir_index = self.visit_expr(*index);
+                // locals have to be ints, and should have been typechecked by now
+                let mir_local = self.rvalue_to_local(mir::Ty::Int, mir_index);
+
+                mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
+                    place.local,
+                    mir::PlaceKind::Index(mir_local),
                 )))
             }
         }

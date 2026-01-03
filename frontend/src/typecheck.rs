@@ -42,6 +42,7 @@ impl Diagnostic for TypeError {
 #[derive(Debug)]
 pub enum TypeErrorKind {
     MissingMainFunction,
+    ExpectedArrayIndex,
     ExpectedType {
         expected: TypeKind,
         found: TypeKind,
@@ -182,6 +183,15 @@ impl ResolveType for Expr {
                 let field_ty = get_field_type(&expr_ty, *field).unwrap();
 
                 Type::synthetic(field_ty)
+            }
+            ExprKind::Index(expr, index) => {
+                let expr_ty = expr.resolve_type(ctx);
+
+                let TypeKind::Alloc(AllocKind::Array(ty, _), _) = expr_ty.node else {
+                    panic!("expected array type, got {:?}", expr_ty.node);
+                };
+
+                Type::with_span(*ty, expr.span.clone())
             }
         }
     }
@@ -372,6 +382,25 @@ impl Typecheck for Expr {
                 expr.typecheck(ctx)?;
                 let expr_ty = expr.resolve_type(ctx);
                 let _field_ty = get_field_type(&expr_ty, *field)?;
+
+                Ok(())
+            }
+            ExprKind::Index(expr, index) => {
+                expr.typecheck(ctx)?;
+                index.typecheck(ctx)?;
+
+                let expr_ty = expr.resolve_type(ctx).node;
+                let index_ty = index.resolve_type(ctx).node;
+
+                match (expr_ty, index_ty) {
+                    (TypeKind::Alloc(AllocKind::Array(_, _), _), TypeKind::Int) => {}
+                    _ => {
+                        return Err(TypeError::new(
+                            TypeErrorKind::ExpectedArrayIndex,
+                            index.span.clone(),
+                        ));
+                    }
+                }
 
                 Ok(())
             }

@@ -81,6 +81,7 @@ impl Display for Ty {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PlaceKind {
     /// array index operations
+    // this was local id, now i'm making this an rvalue
     Index(LocalId),
     /// field idx, and a type for validation
     Field(usize, Ty),

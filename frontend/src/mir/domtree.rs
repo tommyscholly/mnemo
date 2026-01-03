@@ -24,7 +24,7 @@ pub trait Searchable<V: Clone> {
     }
 }
 
-pub trait DomTree<V>: Searchable<V>
+pub trait DomTreeImpl<V>: Searchable<V>
 where
     V: Clone + Eq + std::hash::Hash,
 {

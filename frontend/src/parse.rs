@@ -199,6 +199,13 @@ fn parse_postfix(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
                 let span = expr.span.merge(&field.span);
                 expr = Spanned::new(ExprKind::FieldAccess(Box::new(expr), field.node), span);
             }
+            Some(Token::LBracket) => {
+                tokens.pop_front();
+                let index = parse_expr(ctx, tokens)?;
+                expect_next(tokens, Token::RBracket)?;
+                let span = expr.span.merge(&index.span);
+                expr = Spanned::new(ExprKind::Index(Box::new(expr), Box::new(index)), span);
+            }
             Some(Token::LParen) => {
                 // Handle calls on any expression (method calls, etc.)
                 tokens.pop_front();
