@@ -167,7 +167,30 @@ impl<'ctx> Llvm<'ctx> {
                     .unwrap()
                     .as_basic_value_enum()
             }
-            mir::PlaceKind::Index(_idx) => todo!(),
+            mir::PlaceKind::Index(local_idx) => {
+                let pointee_ty = local.ty.into_array_type().get_element_type();
+
+                let index_local = self.function_locals.get(local_idx).unwrap();
+                let index_val = self
+                    .builder
+                    .build_load(index_local.ty, index_local.alloc, "index_load")?
+                    .into_int_value();
+                let zero = self.ctx().i32_type().const_zero();
+                println!("index_val: {:?}", index_val);
+
+                let gep = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        local.ty,
+                        local.alloc,
+                        &[zero, index_val],
+                        "arr_index_gep",
+                    )
+                }?;
+
+                self.builder
+                    .build_load(pointee_ty, gep, "arr_index_load")?
+                    .as_basic_value_enum()
+            }
         };
 
         Ok(load)
@@ -190,6 +213,7 @@ impl<'ctx> Llvm<'ctx> {
     fn compile_rvalue(
         &self,
         rvalue: &mir::RValue,
+        destination: Option<PointerValue<'ctx>>,
         _llvm_fn: &FunctionValue<'ctx>,
         _ctx: &FrontendCtx,
     ) -> Result<BasicValueEnum<'ctx>> {
@@ -230,7 +254,7 @@ impl<'ctx> Llvm<'ctx> {
                             let index = i32_type.const_int(i as u64, false);
 
                             let elem_ptr = unsafe {
-                                self.builder.build_gep(
+                                self.builder.build_in_bounds_gep(
                                     array_type,
                                     array_ptr,
                                     &[zero, index],
@@ -241,7 +265,19 @@ impl<'ctx> Llvm<'ctx> {
                             self.builder.build_store(elem_ptr, val)?;
                         }
 
-                        array_ptr.as_basic_value_enum()
+                        // match destination {
+                        //     Some(destination) => {
+                        //         self.builder.build_store(destination, array_ptr)?;
+                        //         destination.as_basic_value_enum()
+                        //     }
+                        //     // if there is no destination, we just return the array ptr, as in calls
+                        //     None => array_ptr.as_basic_value_enum(),
+                        // }
+
+                        // copy array into memory to be assigned in compile_statement, this is inefficient
+                        self.builder
+                            .build_load(array_type, array_ptr, "array_load")?
+                            .as_basic_value_enum()
                     }
                     AllocKind::Record(fields) => {
                         let field_tys: Vec<BasicTypeEnum<'ctx>> = fields
@@ -304,9 +340,8 @@ impl<'ctx> Llvm<'ctx> {
             .position_at_end(llvm_fn.get_last_basic_block().unwrap());
         match stmt {
             mir::Statement::Assign(localid, rvalue) => {
-                let value = self.compile_rvalue(rvalue, llvm_fn, ctx)?;
-
                 let alloca = self.function_locals.get(localid).unwrap().alloc;
+                let value = self.compile_rvalue(rvalue, Some(alloca), llvm_fn, ctx)?;
 
                 self.builder.build_store(alloca, value).unwrap();
             }
@@ -352,7 +387,7 @@ impl<'ctx> Llvm<'ctx> {
 
                 let mut call_args = Vec::new();
                 for rval in args {
-                    let basic_elem_type = self.compile_rvalue(&rval, llvm_fn, ctx)?;
+                    let basic_elem_type = self.compile_rvalue(&rval, None, llvm_fn, ctx)?;
                     call_args.push(basic_elem_type.into());
                 }
 
