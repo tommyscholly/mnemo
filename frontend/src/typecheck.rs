@@ -3,9 +3,14 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
+    Ctx,
     ast::{
-        self, AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Match, Module, Params, Pat, PatKind, Region, Signature, SignatureInner, Stmt, StmtKind, Type, TypeKind, ValueKind, VariantField
-    }, ctx::Symbol, span::{Diagnostic, Span, Spanned, DUMMY_SPAN}, Ctx
+        self, AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Match,
+        Module, Params, Pat, PatKind, Region, Signature, SignatureInner, Stmt, StmtKind, Type,
+        TypeKind, ValueKind, VariantField,
+    },
+    ctx::Symbol,
+    span::{DUMMY_SPAN, Diagnostic, Span, Spanned},
 };
 
 #[derive(Debug)]
@@ -38,6 +43,7 @@ impl Diagnostic for TypeError {
 pub enum TypeErrorKind {
     MissingMainFunction,
     ExpectedArrayIndex,
+    ExpectedVariant,
     ExpectedType {
         expected: TypeKind,
         found: TypeKind,
@@ -73,6 +79,7 @@ pub enum TypeErrorKind {
 
 pub struct TypecheckCtx<'a> {
     front_ctx: &'a mut Ctx,
+    // TOOD: track scope of symbols
     type_map: HashMap<Symbol, Type>,
     function_sigs: HashMap<Symbol, Signature>,
 }
@@ -421,6 +428,17 @@ impl Typecheck for Expr {
     }
 }
 
+fn bind_pattern(pat: &Pat, ty: &Type, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
+    match &pat.node {
+        PatKind::Symbol(name) => {
+            ctx.type_map.insert(*name, ty.clone());
+        }
+        _ => todo!(),
+    }
+
+    Ok(())
+}
+
 fn structural_typecheck(
     expr_ty: &TypeKind,
     declared_ty: &TypeKind,
@@ -514,10 +532,12 @@ impl Typecheck for Stmt {
                         &declared_ty.node,
                         declared_ty.span.clone(),
                     )?;
+
+                    ctx.type_map.insert(name.node, declared_ty.clone());
                 } else {
                     *ty = Some(expr_ty.clone());
+                    ctx.type_map.insert(name.node, expr_ty);
                 }
-                ctx.type_map.insert(name.node, expr_ty);
             }
             StmtKind::Assign { name, expr } => {
                 expr.typecheck(ctx)?;
@@ -549,7 +569,70 @@ impl Typecheck for Stmt {
                 }
             }
             StmtKind::Call(c) => type_check_call(c, ctx)?,
-            StmtKind::Match(Match { scrutinee, arms }) => todo!(),
+            StmtKind::Match(Match { scrutinee, arms }) => {
+                scrutinee.typecheck(ctx)?;
+                let scrutinee_ty = scrutinee.resolve_type(ctx);
+                for arm in arms {
+                    match &arm.pat.node {
+                        PatKind::Symbol(name) => {
+                            // symbols shouldnt need type checking, we just have to bind them in the
+                            // type map
+                            bind_pattern(&arm.pat, &scrutinee_ty, ctx)?;
+                        }
+                        PatKind::Variant { name, bindings } => {
+                            let TypeKind::Variant(vfields) = &scrutinee_ty.node else {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::ExpectedVariant,
+                                    scrutinee_ty.span.clone(),
+                                ));
+                            };
+
+                            let Some(variant) = vfields.iter().find(|v| v.name.node == *name)
+                            else {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::UnknownSymbol(*name),
+                                    arm.pat.span.clone(),
+                                ));
+                            };
+
+                            if bindings.len() != variant.adts.len() {
+                                return Err(TypeError::new(
+                                    // TODO: better error message
+                                    TypeErrorKind::ExpectedVariant,
+                                    arm.pat.span.clone(),
+                                ));
+                            }
+
+                            for (binding, adt) in bindings.iter().zip(variant.adts.iter()) {
+                                bind_pattern(binding, adt, ctx)?;
+                            }
+                        }
+                        PatKind::Record(fields) => {
+                            let TypeKind::Record(scru_fields) = &scrutinee_ty.node else {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::ExpectedRecord,
+                                    scrutinee_ty.span.clone(),
+                                ));
+                            };
+
+                            let pat_ty = TypeKind::Record(fields.clone());
+                            structural_typecheck(
+                                &scrutinee_ty.node,
+                                &pat_ty,
+                                scrutinee_ty.span.clone(),
+                            )?;
+
+                            for field in fields {
+                                ctx.type_map.insert(field.name, field.ty.clone().unwrap());
+                            }
+                        }
+                        PatKind::Wildcard => {}
+                        _ => todo!(),
+                    }
+
+                    arm.body.typecheck(ctx)?;
+                }
+            }
         }
 
         Ok(())

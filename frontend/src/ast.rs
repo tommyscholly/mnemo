@@ -130,6 +130,7 @@ pub enum PatKind {
         bindings: Vec<Pat>,
     },
     Tuple(Vec<Pat>),
+    Record(Vec<RecordField>)
 }
 
 pub type Pat = Spanned<PatKind>;

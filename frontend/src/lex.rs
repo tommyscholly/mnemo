@@ -101,6 +101,7 @@ pub enum Token {
     FatArrow,
     At,
     Dot,
+    DotDot,
     Caret,
     Bar,
 }
@@ -239,7 +240,7 @@ impl<'a, T: Iterator<Item = LexItem>> Lexer<'a, T> {
                     advance_single_token!(self, Token::Comma)
                 }
                 '.' => {
-                    advance_single_token!(self, Token::Dot)
+                    handle_operator!(self, '.', '.', Token::Dot, Token::DotDot)
                 }
                 '|' => {
                     advance_single_token!(self, Token::Bar)

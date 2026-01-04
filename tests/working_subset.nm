@@ -32,5 +32,7 @@ main :: () {
         Some(x) => { printf(fmt_string, x) }
       | None    => { printf(fmt_string, 0) }
 
+    match inline_record with { a : int, .. } => { printf(fmt_string, a) }
+
     // dyn_array := [] { 1, 2 }
 }
