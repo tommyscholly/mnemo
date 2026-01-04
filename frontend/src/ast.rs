@@ -110,6 +110,7 @@ pub enum ExprKind {
         rhs: Box<Expr>,
     },
     FieldAccess(Box<Expr>, Symbol),
+    TupleAccess(Box<Expr>, usize),
     // a function call that is used in an assignment or declaration
     Call(Call),
     Index(Box<Expr>, Box<Expr>),

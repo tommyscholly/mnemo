@@ -32,7 +32,7 @@ impl Ty {
             Ty::Tuple(tys) => tys.iter().map(|t| t.bytes()).sum(),
             Ty::Ptr(_) => 4,
             // this just returns the size of the largest field, not including the tag byte
-            Ty::TaggedUnion(tags_tys) => tags_tys.iter().map(|(tag, ty)| ty.bytes()).max().unwrap(),
+            Ty::TaggedUnion(tags_tys) => tags_tys.iter().map(|(_tag, ty)| ty.bytes()).max().unwrap(),
             Ty::Record(tys) => tys.iter().map(|t| t.bytes()).sum(),
         }
     }

@@ -111,6 +111,14 @@ impl<'ctx> Llvm<'ctx> {
                 ctx.struct_type(&[tag_ty, payload_ty], false)
                     .as_basic_type_enum()
             }
+            mir::Ty::Tuple(tys) => {
+                let field_tys: Vec<BasicTypeEnum<'ctx>> = tys
+                    .iter()
+                    .map(|t| Self::basic_type_to_llvm_basic_type(ctx, t))
+                    .collect();
+
+                ctx.struct_type(&field_tys, false).as_basic_type_enum()
+            }
             ty => panic!("unimplemented type {:?}", ty),
         }
     }
@@ -146,6 +154,7 @@ impl<'ctx> Llvm<'ctx> {
         block_id: mir::BlockId,
     ) -> BasicBlock<'ctx> {
         if let Some(bb) = self.function_blocks.get(&block_id) {
+            println!("found existing bb {block_id}: {:?}", bb);
             return *bb;
         }
 
@@ -154,6 +163,7 @@ impl<'ctx> Llvm<'ctx> {
             .append_basic_block(*llvm_fn, format!("bb{}", block_id).as_str());
 
         self.function_blocks.insert(block_id, bb);
+        println!("created bb {block_id}: {:?}", bb);
         bb
     }
 
@@ -347,6 +357,32 @@ impl<'ctx> Llvm<'ctx> {
 
                         variant_ptr.as_basic_value_enum()
                     }
+                    AllocKind::Tuple(tys) => {
+                        let field_tys: Vec<BasicTypeEnum<'ctx>> = tys
+                            .iter()
+                            .map(|t| Self::basic_type_to_llvm_basic_type(self.ctx(), t))
+                            .collect();
+
+                        println!("field_tys: {:?}", field_tys);
+                        let struct_ty = self.ctx().struct_type(&field_tys, false);
+
+                        let struct_ptr = self.builder.build_alloca(struct_ty, "struct_alloca")?;
+
+                        for (i, operand) in operands.iter().take(tys.len()).enumerate() {
+                            let field_alloca = self.builder.build_struct_gep(
+                                struct_ty,
+                                struct_ptr,
+                                i as u32,
+                                "field_alloca",
+                            )?;
+                            self.builder
+                                .build_store(field_alloca, self.compile_operand(operand)?)?;
+                        }
+
+                        println!("struct_ptr: {:?}", struct_ptr);
+                        self.builder
+                            .build_load(struct_ty, struct_ptr, "struct_load")?
+                    }
                     a => panic!("unimplemented alloc kind {:?}", a),
                 }
             }
@@ -361,8 +397,6 @@ impl<'ctx> Llvm<'ctx> {
         llvm_fn: &FunctionValue<'ctx>,
         ctx: &FrontendCtx,
     ) -> Result<()> {
-        self.builder
-            .position_at_end(llvm_fn.get_last_basic_block().unwrap());
         match stmt {
             mir::Statement::Assign(localid, rvalue) => {
                 let alloca = self.function_locals.get(localid).unwrap().alloc;
@@ -460,6 +494,7 @@ impl<'ctx> Llvm<'ctx> {
         llvm_fn: &FunctionValue<'ctx>,
         ctx: &FrontendCtx,
     ) -> Result<BasicBlock<'ctx>> {
+        println!("compiling block: {:?}", block);
         let bb = self.get_or_create_bb(llvm_fn, block.block_id);
 
         self.builder.position_at_end(bb);

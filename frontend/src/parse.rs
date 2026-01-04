@@ -18,6 +18,7 @@ pub struct ParseError {
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseErrorKind {
     ExpectedIdentifier,
+    MalformedAccess,
     ExpectedType,
     ExpectedExpression,
     ExpectedToken(Token),
@@ -195,9 +196,38 @@ fn parse_postfix(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
         match peek_token(tokens) {
             Some(Token::Dot) => {
                 tokens.pop_front();
-                let field = expect_identifier(tokens)?;
-                let span = expr.span.merge(&field.span);
-                expr = Spanned::new(ExprKind::FieldAccess(Box::new(expr), field.node), span);
+                if let Some(Token::Identifier(_)) = peek_token(tokens) {
+                    let field = expect_identifier(tokens)?;
+
+                    let span = expr.span.merge(&field.span);
+                    expr = Spanned::new(ExprKind::FieldAccess(Box::new(expr), field.node), span);
+                } else if let Some(Token::Int(_)) = peek_token(tokens) {
+                    let Some(Spanned { node, span }) = tokens.pop_front() else {
+                        unreachable!()
+                    };
+
+                    let Token::Int(i) = node else {
+                        unreachable!()
+                    };
+
+                    let index: usize = match (i).try_into() {
+                        Ok(i) => i,
+                        Err(_) => {
+                            return Err(ParseError::new(
+                                ParseErrorKind::MalformedAccess,
+                                span,
+                            ));
+                        }
+                    };
+
+                    let span = expr.span.merge(&span);
+                    expr = Spanned::new(ExprKind::TupleAccess(Box::new(expr), index), span);
+                } else {
+                    return Err(ParseError::new(
+                        ParseErrorKind::MalformedAccess,
+                        peek_span(tokens).unwrap_or(expr.span),
+                    ));
+                }
             }
             Some(Token::LBracket) => {
                 tokens.pop_front();

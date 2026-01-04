@@ -403,6 +403,24 @@ impl AstVisitor for AstToMIR<'_> {
                     mir::PlaceKind::Index(mir_local),
                 )))
             }
+            ExprKind::TupleAccess(expr, index) => {
+                let mir_expr = self.visit_expr(*expr);
+                // SAFETY: we should have type checked this, which means that the expr should be a place
+                let place = mir_expr.place().unwrap();
+
+                let TypeKind::Alloc(AllocKind::Tuple(tys), _) =
+                    self.local_types.get(&place.local).unwrap()
+                else {
+                    panic!("expected tuple type, got {:?}", place.kind);
+                };
+
+                let field_ty = ast_type_to_mir_type(&tys[index]);
+
+                mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
+                    place.local,
+                    mir::PlaceKind::Field(index, field_ty),
+                )))
+            }
         }
     }
 

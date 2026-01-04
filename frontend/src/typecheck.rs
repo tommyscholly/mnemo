@@ -86,22 +86,6 @@ impl<'a> TypecheckCtx<'a> {
     fn new(ctx: &'a mut Ctx) -> Self {
         let mut function_sigs = HashMap::new();
 
-        // Register built-in functions
-        // println takes one int argument and returns unit
-        // function_sigs.insert(
-        //     Symbol(-1), // println
-        //     Spanned::new(
-        //         SignatureInner {
-        //             params: Params {
-        //                 patterns: vec![Spanned::new(PatKind::Symbol(Symbol(-100)), DUMMY_SPAN)],
-        //                 types: vec![Type::synthetic(TypeKind::Int)],
-        //             },
-        //             return_ty: None,
-        //         },
-        //         DUMMY_SPAN,
-        //     ),
-        // );
-
         Self {
             front_ctx: ctx,
             type_map: HashMap::new(),
@@ -184,6 +168,21 @@ impl ResolveType for Expr {
                 let field_ty = get_field_type(&expr_ty, *field).unwrap();
 
                 Type::synthetic(field_ty)
+            }
+            ExprKind::TupleAccess(expr, index) => {
+                let expr_ty = expr.resolve_type(ctx);
+
+                let TypeKind::Alloc(AllocKind::Tuple(tys), _) = expr_ty.node else {
+                    panic!("expected tuple type, got {:?}", expr_ty.node);
+                };
+
+                if *index >= tys.len() {
+                    panic!("tuple index out of bounds");
+                }
+
+                let ty = tys[*index].clone();
+
+                Type::synthetic(ty)
             }
             ExprKind::Index(expr, index) => {
                 let expr_ty = expr.resolve_type(ctx);
@@ -317,7 +316,6 @@ impl Typecheck for Expr {
                     }
                     Ok(())
                 }
-
             },
             ExprKind::BinOp { lhs, rhs, .. } => {
                 lhs.typecheck(ctx)?;
@@ -401,6 +399,23 @@ impl Typecheck for Expr {
                         return Err(TypeError::new(
                             TypeErrorKind::ExpectedArrayIndex,
                             index.span.clone(),
+                        ));
+                    }
+                }
+
+                Ok(())
+            }
+            ExprKind::TupleAccess(expr, index) => {
+                expr.typecheck(ctx)?;
+
+                let expr_ty = expr.resolve_type(ctx).node;
+
+                match (expr_ty) {
+                    TypeKind::Alloc(AllocKind::Tuple(_), _) => {}
+                    _ => {
+                        return Err(TypeError::new(
+                            TypeErrorKind::ExpectedArrayIndex,
+                            expr.span.clone(),
                         ));
                     }
                 }
