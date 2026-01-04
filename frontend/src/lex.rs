@@ -50,6 +50,8 @@ pub enum Keyword {
     Bool,
     True,
     False,
+    Match,
+    With,
 }
 
 impl TryFrom<&str> for Keyword {
@@ -66,6 +68,8 @@ impl TryFrom<&str> for Keyword {
             "bool" => Ok(Keyword::Bool),
             "true" => Ok(Keyword::True),
             "false" => Ok(Keyword::False),
+            "match" => Ok(Keyword::Match),
+            "with" => Ok(Keyword::With),
             _ => Err(()),
         }
     }
@@ -94,6 +98,7 @@ pub enum Token {
     Comma,
     SemiColon,
     Arrow,
+    FatArrow,
     At,
     Dot,
     Caret,
@@ -240,7 +245,28 @@ impl<'a, T: Iterator<Item = LexItem>> Lexer<'a, T> {
                     advance_single_token!(self, Token::Bar)
                 }
                 '=' => {
-                    handle_operator!(self, '=', '=', Token::Eq, Token::BinOp(BinOp::EqEq))
+                    self.chars.next();
+                    self.current += 1;
+
+                    if self.chars.peek() == Some(&'=') {
+                        self.chars.next();
+                        self.current += 1;
+
+                        let span = self.start..self.current;
+                        self.start = self.current;
+                        return Ok(crate::span::Spanned::new(Token::BinOp(BinOp::EqEq), span));
+                    } else if self.chars.peek() == Some(&'>') {
+                        self.chars.next();
+                        self.current += 1;
+
+                        let span = self.start..self.current;
+                        self.start = self.current;
+                        return Ok(crate::span::Spanned::new(Token::FatArrow, span));
+                    } else {
+                        let span = self.start..self.current;
+                        self.start = self.current;
+                        return Ok(crate::span::Spanned::new(Token::Eq, span));
+                    }
                 }
                 '>' => {
                     handle_operator!(

@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 
 use crate::ast::{
-    AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Module, Params,
-    PatKind, RecordField, Signature, SignatureInner, Stmt, StmtKind, Type, TypeAliasDefinition,
-    TypeKind, ValueKind, VariantField,
+    AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Match, MatchArm,
+    Module, Params, Pat, PatKind, RecordField, Signature, SignatureInner, Stmt, StmtKind, Type,
+    TypeAliasDefinition, TypeKind, ValueKind, VariantField,
 };
 use crate::ctx::{Ctx, Symbol};
 use crate::lex::{BinOp, Keyword, Token};
@@ -20,6 +20,7 @@ pub enum ParseErrorKind {
     ExpectedIdentifier,
     MalformedAccess,
     ExpectedType,
+    ExpectedPattern,
     ExpectedExpression,
     ExpectedToken(Token),
     UnexpectedEOF,
@@ -206,17 +207,12 @@ fn parse_postfix(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
                         unreachable!()
                     };
 
-                    let Token::Int(i) = node else {
-                        unreachable!()
-                    };
+                    let Token::Int(i) = node else { unreachable!() };
 
                     let index: usize = match (i).try_into() {
                         Ok(i) => i,
                         Err(_) => {
-                            return Err(ParseError::new(
-                                ParseErrorKind::MalformedAccess,
-                                span,
-                            ));
+                            return Err(ParseError::new(ParseErrorKind::MalformedAccess, span));
                         }
                     };
 
@@ -726,9 +722,147 @@ fn parse_ifelse(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResu
     ))
 }
 
+fn parse_pat(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Pat> {
+    let Some(token) = tokens.front() else {
+        return Err(ParseError::eof());
+    };
+
+    match &token.node {
+        Token::Identifier(name) => {
+            let name_str = ctx.resolve(*name);
+
+            if name_str == "_" {
+                let span = tokens.pop_front().unwrap().span;
+                return Ok(Spanned::new(PatKind::Wildcard, span));
+            }
+
+            let first_char = name_str.chars().next().unwrap();
+            let is_variant = first_char.is_ascii_uppercase();
+            let ident = expect_identifier(tokens)?;
+
+            if is_variant {
+                if let Some(Token::LParen) = peek_token(tokens) {
+                    tokens.pop_front();
+                    let mut bindings = Vec::new();
+
+                    loop {
+                        if let Some(Token::RParen) = peek_token(tokens) {
+                            break;
+                        }
+
+                        bindings.push(parse_pat(ctx, tokens)?);
+
+                        if let Some(Token::Comma) = peek_token(tokens) {
+                            tokens.pop_front();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let end_span = expect_next(tokens, Token::RParen)?;
+                    let span = ident.span.merge(&end_span);
+
+                    Ok(Spanned::new(
+                        PatKind::Variant {
+                            name: ident.node,
+                            bindings,
+                        },
+                        span,
+                    ))
+                } else {
+                    Ok(Spanned::new(
+                        PatKind::Variant {
+                            name: ident.node,
+                            bindings: vec![],
+                        },
+                        ident.span,
+                    ))
+                }
+            } else {
+                Ok(Spanned::new(PatKind::Symbol(ident.node), ident.span))
+            }
+        }
+        // TOOD: clean this up to a parse literal function
+        Token::Int(i) => {
+            let i = *i;
+            let span = tokens.pop_front().unwrap().span;
+            Ok(Spanned::new(PatKind::Literal(ValueKind::Int(i)), span))
+        }
+        Token::Keyword(Keyword::True) => {
+            let span = tokens.pop_front().unwrap().span;
+            Ok(Spanned::new(PatKind::Literal(ValueKind::Bool(true)), span))
+        }
+        Token::Keyword(Keyword::False) => {
+            let span = tokens.pop_front().unwrap().span;
+            Ok(Spanned::new(PatKind::Literal(ValueKind::Bool(false)), span))
+        }
+        Token::LParen => {
+            let start_span = tokens.pop_front().unwrap().span;
+            let mut patterns = Vec::new();
+
+            loop {
+                if let Some(Token::RParen) = peek_token(tokens) {
+                    break;
+                }
+
+                patterns.push(parse_pat(ctx, tokens)?);
+
+                if let Some(Token::Comma) = peek_token(tokens) {
+                    tokens.pop_front();
+                } else {
+                    break;
+                }
+            }
+
+            let end_span = expect_next(tokens, Token::RParen)?;
+            let span = start_span.merge(&end_span);
+
+            Ok(Spanned::new(PatKind::Tuple(patterns), span))
+        }
+        _ => Err(ParseError::new(
+            ParseErrorKind::ExpectedPattern,
+            token.span.clone(),
+        )),
+    }
+}
+
+fn parse_match_arm(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<MatchArm> {
+    let pat = parse_pat(ctx, tokens)?;
+    expect_next(tokens, Token::FatArrow)?;
+    let body = parse_block(ctx, tokens)?;
+
+    Ok(MatchArm { pat, body })
+}
+
+fn parse_match(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
+    let match_span = expect_next(tokens, Token::Keyword(Keyword::Match))?;
+    let scrutinee = parse_expr(ctx, tokens)?;
+    expect_next(tokens, Token::Keyword(Keyword::With))?;
+
+    let mut arms = Vec::new();
+
+    loop {
+        let arm = parse_match_arm(ctx, tokens)?;
+        arms.push(arm);
+
+        if let Some(Token::Bar) = peek_token(tokens) {
+            tokens.pop_front();
+        } else {
+            break;
+        }
+    }
+
+    let span = match_span.merge(&arms.last().unwrap().body.span);
+    Ok(Spanned::new(
+        StmtKind::Match(Match { scrutinee, arms }),
+        span,
+    ))
+}
+
 fn parse_stmt(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
     match peek_token(tokens) {
         Some(Token::Keyword(Keyword::If)) => parse_ifelse(ctx, tokens),
+        Some(Token::Keyword(Keyword::Match)) => parse_match(ctx, tokens),
         // Some(Token::Keyword(Keyword::Return))
         _ => {
             let name = expect_identifier(tokens)?;
@@ -1639,7 +1773,7 @@ mod tests {
             "foo :: () { 
             x := y.
         }",
-            ParseErrorKind::ExpectedIdentifier,
+            ParseErrorKind::MalformedAccess,
         );
     }
 
@@ -1683,5 +1817,45 @@ mod tests {
         assert_eq!(*method_name, Symbol(3));
 
         assert!(call.args.is_empty());
+    }
+
+    #[test]
+    fn parse_match() {
+        let decs = expect_parse_ok(
+            "foo :: () { 
+            match x with
+                Some(x) => { y := x }
+              | None    => { y := 0 }
+            }",
+            1,
+        );
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            panic!("expected procedure");
+        };
+
+        let StmtKind::Match(Match { scrutinee, arms }) = &block.node.stmts[0].node else {
+            panic!("expected match");
+        };
+
+        assert!(matches!(
+            scrutinee.node,
+            ExprKind::Value(ValueKind::Ident(Symbol(1)))
+        ));
+
+        assert_eq!(arms.len(), 2);
+
+        let MatchArm { pat, body } = &arms[0];
+        assert!(
+            matches!(&pat.node, PatKind::Variant { name, bindings } if *name == Symbol(2) && bindings.len() == 1)
+        );
+        assert_eq!(body.node.stmts.len(), 1);
+
+        let MatchArm { pat, body } = &arms[1];
+        assert!(
+            matches!(&pat.node, PatKind::Variant { name, bindings } if *name == Symbol(4) && bindings.is_empty())
+        );
+        assert_eq!(body.node.stmts.len(), 1);
     }
 }

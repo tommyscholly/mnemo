@@ -3,14 +3,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Ctx,
     ast::{
-        self, AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Module,
-        Params, Pat, PatKind, Region, Signature, SignatureInner, Stmt, StmtKind, Type, TypeKind,
-        ValueKind, VariantField,
-    },
-    ctx::Symbol,
-    span::{DUMMY_SPAN, Diagnostic, Span, Spanned},
+        self, AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Match, Module, Params, Pat, PatKind, Region, Signature, SignatureInner, Stmt, StmtKind, Type, TypeKind, ValueKind, VariantField
+    }, ctx::Symbol, span::{Diagnostic, Span, Spanned, DUMMY_SPAN}, Ctx
 };
 
 #[derive(Debug)]
@@ -554,6 +549,7 @@ impl Typecheck for Stmt {
                 }
             }
             StmtKind::Call(c) => type_check_call(c, ctx)?,
+            StmtKind::Match(Match { scrutinee, arms }) => todo!(),
         }
 
         Ok(())

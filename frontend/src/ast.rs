@@ -121,9 +121,30 @@ pub type Expr = Spanned<ExprKind>;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PatKind {
     Symbol(Symbol),
+    Wildcard,
+    Literal(ValueKind),
+    Variant {
+        name: Symbol,
+        // x and y are the patterns
+        // Some(x, y)
+        bindings: Vec<Pat>,
+    },
+    Tuple(Vec<Pat>),
 }
 
 pub type Pat = Spanned<PatKind>;
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct MatchArm {
+    pub pat: Pat,
+    pub body: Block,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Match {
+    pub scrutinee: Expr,
+    pub arms: Vec<MatchArm>,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Params {
@@ -153,6 +174,7 @@ pub enum StmtKind {
     // a function call with no assignment
     Call(Call),
     IfElse(IfElse),
+    Match(Match),
 }
 
 pub type Stmt = Spanned<StmtKind>;

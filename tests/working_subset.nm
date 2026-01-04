@@ -9,8 +9,8 @@ main :: () {
     tuple := (52, true)
 
     inline_record : { a : int, b : int } = { a := untyped_int, b := typed_int }
-    // inline_some : Some(int) | None = Some(1)
-    // inline_none : Some(int) | None = None
+    inline_some : Some(int) | None = Some(1)
+    inline_none : Some(int) | None = None
 
     print_int := inline_record.a + inline_record.b
 
@@ -26,8 +26,11 @@ main :: () {
     }
 
     printf(fmt_string, tuple.0)
-
     print_bool(tuple.1)
+
+    match inline_some with
+        Some(x) => { printf(fmt_string, x) }
+      | None    => { printf(fmt_string, 0) }
 
     // dyn_array := [] { 1, 2 }
 }
