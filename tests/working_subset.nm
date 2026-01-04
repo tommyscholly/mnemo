@@ -15,7 +15,13 @@ main :: () {
     fmt_string := make_fmt_str()
     printf(fmt_string, print_int)
 
-    printf(fmt_string, array[0])
+    bool_val : bool = false
+
+    if bool_val {
+        printf(fmt_string, array[0])
+    } else {
+        printf(fmt_string, array[1])
+    }
 
     // dyn_array := [] { 1, 2 }
     // tuple := (1, 2)

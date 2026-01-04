@@ -63,7 +63,8 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
                 .collect();
             mir::Ty::Record(field_tys)
         }
-        _ => todo!(),
+        TypeKind::Bool => mir::Ty::Bool,
+        tk => panic!("unimplemented type kind {:?}", tk),
     }
 }
 
@@ -207,22 +208,16 @@ impl<'a> AstToMIR<'a> {
     fn call(&mut self, callee: Expr, args: Vec<Expr>, dest: Option<mir::LocalId>) {
         let args = args.into_iter().map(|a| self.visit_expr(a)).collect();
 
-        let next_block_idx = self.current_block + 1;
-        let next_block = mir::BasicBlock::new(next_block_idx);
-
         let name = self.resolve_callee_function_name(&callee);
         assert!(name.is_some());
 
         let name = self.ctx.resolve(name.unwrap()).to_string();
-        let call_transfer = mir::Terminator::Call {
+        let call = mir::Statement::Call {
             function_name: name,
             args,
             destination: dest,
-            target: next_block_idx,
         };
-        self.get_current_block().terminator = call_transfer;
-        self.get_current_function().blocks.push(next_block);
-        self.current_block = next_block_idx;
+        self.get_current_block().stmts.push(call);
     }
 
     fn rvalue_to_local(&mut self, rvalue_ty: mir::Ty, rvalue: mir::RValue) -> mir::LocalId {
@@ -258,7 +253,12 @@ impl AstVisitor for AstToMIR<'_> {
     fn visit_expr(&mut self, expr: Expr) -> mir::RValue {
         match expr.node {
             ExprKind::Value(v) => match v {
-                ValueKind::Int(i) => mir::RValue::Use(mir::Operand::Constant(i)),
+                ValueKind::Int(i) => {
+                    mir::RValue::Use(mir::Operand::Constant(mir::Constant::Int(i)))
+                }
+                ValueKind::Bool(b) => {
+                    mir::RValue::Use(mir::Operand::Constant(mir::Constant::Bool(b)))
+                }
                 ValueKind::Ident(i) => {
                     let local_id = self.symbol_table[&i];
                     let place = mir::Place::new(local_id, mir::PlaceKind::Deref);
@@ -443,7 +443,7 @@ impl AstVisitor for AstToMIR<'_> {
                 // store the current block id of where the if starts so we can refer to it later
                 let current_block_id = self.current_block;
 
-                let cond_local = self.new_local(&TypeKind::Int);
+                let cond_local = self.new_local(&TypeKind::Bool);
                 let cond_rvalue = self.visit_expr(cond);
                 let cond_stmt = mir::Statement::Assign(cond_local, cond_rvalue);
                 self.get_current_block().stmts.push(cond_stmt);
@@ -457,8 +457,9 @@ impl AstVisitor for AstToMIR<'_> {
                 self.get_current_function().blocks.push(then_block);
                 self.current_block = then_block_entrance_id;
                 self.visit_block(then);
+                let last_then_block_id = self.current_block;
 
-                let mut else_block_id = if let Some(else_) = else_ {
+                let (mut else_block_id, last_else_block_id) = if let Some(else_) = else_ {
                     let else_block_entrance_id = self.current_block + 1;
                     let mut else_block = mir::BasicBlock::new(else_block_entrance_id);
                     // SAFETY: same as above
@@ -468,9 +469,9 @@ impl AstVisitor for AstToMIR<'_> {
                     self.current_block = else_block_entrance_id;
                     self.visit_block(else_);
                     let newest_block = self.get_current_block().block_id;
-                    Some(newest_block)
+                    (Some(else_block_entrance_id), Some(newest_block))
                 } else {
-                    None
+                    (None, None)
                 };
 
                 let join_block_entrance_id = self.current_block + 1;
@@ -484,9 +485,12 @@ impl AstVisitor for AstToMIR<'_> {
                     self.get_current_block().stmts.push(phi);
                 }
 
-                if let Some(id) = else_block_id {
+                if let Some(id) = last_else_block_id {
                     self.get_block(id).terminator = mir::Terminator::Br(join_block_entrance_id);
                 }
+
+                self.get_block(last_then_block_id).terminator =
+                    mir::Terminator::Br(join_block_entrance_id);
 
                 else_block_id.get_or_insert(join_block_entrance_id);
 
@@ -701,23 +705,25 @@ mod tests {
         };
         let expected_body_block = mir::BasicBlock {
             block_id: 3,
-            stmts: vec![mir::Statement::Assign(
-                3,
-                mir::RValue::BinOp(
-                    lex::BinOp::Add,
-                    mir::Operand::Copy(mir::Place::new(0, mir::PlaceKind::Deref)),
-                    mir::Operand::Constant(1),
+            stmts: vec![
+                mir::Statement::Assign(
+                    3,
+                    mir::RValue::BinOp(
+                        lex::BinOp::Add,
+                        mir::Operand::Copy(mir::Place::new(0, mir::PlaceKind::Deref)),
+                        mir::Operand::Constant(mir::Constant::Int(1)),
+                    ),
                 ),
-            )],
-            terminator: mir::Terminator::Call {
-                function_name: "bar".to_string(),
-                args: vec![mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
-                    0,
-                    mir::PlaceKind::Deref,
-                )))],
-                destination: None,
-                target: 4,
-            },
+                mir::Statement::Call {
+                    function_name: "bar".to_string(),
+                    args: vec![mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
+                        0,
+                        mir::PlaceKind::Deref,
+                    )))],
+                    destination: None,
+                },
+            ],
+            terminator: mir::Terminator::Br(4),
         };
         let expected_return_block = mir::BasicBlock {
             block_id: 4,
@@ -741,23 +747,25 @@ mod tests {
         };
         let expected_body_block = mir::BasicBlock {
             block_id: 6,
-            stmts: vec![mir::Statement::Assign(
-                4,
-                mir::RValue::BinOp(
-                    lex::BinOp::Add,
-                    mir::Operand::Copy(mir::Place::new(1, mir::PlaceKind::Deref)),
-                    mir::Operand::Constant(1),
+            stmts: vec![
+                mir::Statement::Assign(
+                    4,
+                    mir::RValue::BinOp(
+                        lex::BinOp::Add,
+                        mir::Operand::Copy(mir::Place::new(1, mir::PlaceKind::Deref)),
+                        mir::Operand::Constant(mir::Constant::Int(1)),
+                    ),
                 ),
-            )],
-            terminator: mir::Terminator::Call {
-                function_name: "bar".to_string(),
-                args: vec![mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
-                    1,
-                    mir::PlaceKind::Deref,
-                )))],
-                destination: None,
-                target: 7,
-            },
+                mir::Statement::Call {
+                    function_name: "bar".to_string(),
+                    args: vec![mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
+                        1,
+                        mir::PlaceKind::Deref,
+                    )))],
+                    destination: None,
+                },
+            ],
+            terminator: mir::Terminator::Br(7),
         };
         let expected_exit_block = mir::BasicBlock {
             block_id: 7,

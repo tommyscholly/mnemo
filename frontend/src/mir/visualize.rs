@@ -5,9 +5,12 @@ pub trait MIRVisualizer {
 }
 
 impl MIRVisualizer for Operand {
-    fn visualize(&self, indent: usize) {
+    fn visualize(&self, _indent: usize) {
         match self {
-            Operand::Constant(i) => print!("{i}"),
+            Operand::Constant(constant) => match constant {
+                Constant::Int(i) => print!("{i}"),
+                Constant::Bool(b) => print!("{b}"),
+            },
             Operand::Copy(place) => match &place.kind {
                 PlaceKind::Deref => print!("%{}", place.local),
                 PlaceKind::Field(idx, ty) => print!("{}.{idx}:<{ty}>", place.local),
@@ -53,17 +56,6 @@ impl MIRVisualizer for Terminator {
                     cond_local_id, then_block_id, else_block_id
                 )
             }
-            Terminator::Call {
-                function_name,
-                args,
-                destination,
-                target,
-            } => {
-                let dest = destination.map_or("None".to_string(), |f| format!("{}", f));
-                print!("call ${} (", function_name);
-                args.iter().for_each(|a| a.visualize(indent));
-                println!(") {} {}", dest, target)
-            }
         }
     }
 }
@@ -80,6 +72,16 @@ impl MIRVisualizer for Statement {
             }
             Statement::Phi(local_id, ids) => {
                 println!("phi %{} = {:?}", local_id, ids);
+            }
+            Statement::Call {
+                function_name,
+                args,
+                destination,
+            } => {
+                let dest = destination.map_or("None".to_string(), |f| format!("{}", f));
+                print!("call ${} (", function_name);
+                args.iter().for_each(|a| a.visualize(indent));
+                println!(") {}", dest)
             }
         }
     }

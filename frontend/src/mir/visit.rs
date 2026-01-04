@@ -10,8 +10,5 @@ pub fn visit_block_succs<F: FnMut(BlockId)>(_func: &Function, block: &BasicBlock
             visit(*then_);
             visit(*else_);
         }
-        Terminator::Call { target, .. } => {
-            visit(*target);
-        }
     }
 }

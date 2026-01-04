@@ -42,7 +42,7 @@ pub struct Llvm<'ctx> {
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     function_locals: HashMap<mir::LocalId, FunctionLocalInfo<'ctx>>,
-    function_blocks: Vec<BasicBlock<'ctx>>,
+    function_blocks: HashMap<mir::BlockId, BasicBlock<'ctx>>,
     target_machine: TargetMachine,
 }
 
@@ -72,7 +72,7 @@ impl<'ctx> Llvm<'ctx> {
             builder,
             target_machine,
             function_locals: HashMap::new(),
-            function_blocks: Vec::new(),
+            function_blocks: HashMap::new(),
         }
     }
 
@@ -140,6 +140,23 @@ impl<'ctx> Llvm<'ctx> {
         }
     }
 
+    fn get_or_create_bb(
+        &mut self,
+        llvm_fn: &FunctionValue<'ctx>,
+        block_id: mir::BlockId,
+    ) -> BasicBlock<'ctx> {
+        if let Some(bb) = self.function_blocks.get(&block_id) {
+            return *bb;
+        }
+
+        let bb = self
+            .ctx()
+            .append_basic_block(*llvm_fn, format!("bb{}", block_id).as_str());
+
+        self.function_blocks.insert(block_id, bb);
+        bb
+    }
+
     fn load_place(&self, place: &mir::Place) -> Result<BasicValueEnum<'ctx>> {
         let local = self.function_locals.get(&place.local).unwrap();
         let load = match &place.kind {
@@ -198,11 +215,19 @@ impl<'ctx> Llvm<'ctx> {
 
     fn compile_operand(&self, operand: &mir::Operand) -> Result<BasicValueEnum<'ctx>> {
         let value = match operand {
-            mir::Operand::Constant(c) => self
-                .ctx()
-                .i32_type()
-                .const_int(*c as u64, false)
-                .as_basic_value_enum(),
+            mir::Operand::Constant(constant) => match constant {
+                mir::Constant::Int(i) => self
+                    .ctx()
+                    .i32_type()
+                    .const_int(*i as u64, false)
+                    .as_basic_value_enum(),
+                mir::Constant::Bool(b) => self
+                    .ctx()
+                    .bool_type()
+                    .const_int(*b as u64, false)
+                    .as_basic_value_enum(),
+            },
+
             // copies are trivial loads
             mir::Operand::Copy(place) => self.load_place(place)?,
         };
@@ -213,7 +238,7 @@ impl<'ctx> Llvm<'ctx> {
     fn compile_rvalue(
         &self,
         rvalue: &mir::RValue,
-        destination: Option<PointerValue<'ctx>>,
+        _destination: Option<PointerValue<'ctx>>,
         _llvm_fn: &FunctionValue<'ctx>,
         _ctx: &FrontendCtx,
     ) -> Result<BasicValueEnum<'ctx>> {
@@ -362,6 +387,29 @@ impl<'ctx> Llvm<'ctx> {
                     .build_store(alloca, phi_value.as_basic_value())
                     .unwrap();
             }
+            mir::Statement::Call {
+                function_name,
+                args,
+                destination,
+            } => {
+                let fn_val = self.module.get_function(function_name.as_str()).unwrap();
+
+                let mut call_args = Vec::new();
+                for rval in args {
+                    let basic_elem_type = self.compile_rvalue(rval, None, llvm_fn, ctx)?;
+                    call_args.push(basic_elem_type.into());
+                }
+
+                let call = self.builder.build_call(fn_val, &call_args, "call_result")?;
+
+                if let Some(destination) = destination {
+                    let alloc = self.function_locals.get(destination).unwrap().alloc;
+                    //
+                    // SAFETY: destination should only be SOME if the call returns
+                    let call_value = call.try_as_basic_value().basic().unwrap();
+                    self.builder.build_store(alloc, call_value)?;
+                }
+            }
         }
 
         Ok(())
@@ -371,44 +419,36 @@ impl<'ctx> Llvm<'ctx> {
         &mut self,
         terminator: mir::Terminator,
         llvm_fn: &FunctionValue<'ctx>,
-        ctx: &FrontendCtx,
+        _ctx: &FrontendCtx,
     ) -> Result<()> {
         match terminator {
             mir::Terminator::Return => {
                 let _ = self.builder.build_return(None);
             }
-            mir::Terminator::Call {
-                function_name,
-                args,
-                destination,
-                target,
-            } => {
-                let fn_val = self.module.get_function(function_name.as_str()).unwrap();
+            mir::Terminator::BrIf(cond_local_id, then_block, else_block) => {
+                println!("cond_local_id: {cond_local_id}");
+                println!("then_block: {then_block}");
+                println!("else_block: {else_block}");
 
-                let mut call_args = Vec::new();
-                for rval in args {
-                    let basic_elem_type = self.compile_rvalue(&rval, None, llvm_fn, ctx)?;
-                    call_args.push(basic_elem_type.into());
-                }
+                let cond_local = self.function_locals.get(&cond_local_id).unwrap();
+                let cond_val = self
+                    .builder
+                    .build_load(cond_local.ty, cond_local.alloc, "cond_val")
+                    .unwrap();
 
-                let call = self.builder.build_call(fn_val, &call_args, "call_result")?;
+                let then_bb = self.get_or_create_bb(llvm_fn, then_block);
+                let else_bb = self.get_or_create_bb(llvm_fn, else_block);
 
-                if let Some(destination) = destination {
-                    let alloc = self.function_locals.get(&destination).unwrap().alloc;
-                    //
-                    // SAFETY: destination should only be SOME if the call returns
-                    let call_value = call.try_as_basic_value().basic().unwrap();
-                    self.builder.build_store(alloc, call_value)?;
-                }
-
-                let target_block = self
-                    .ctx()
-                    .append_basic_block(*llvm_fn, &format!("bb{}", target));
-                self.function_blocks.push(target_block);
-
+                self.builder.build_conditional_branch(
+                    cond_val.into_int_value(),
+                    then_bb,
+                    else_bb,
+                )?;
+            }
+            mir::Terminator::Br(target_block) => {
+                let target_block = self.get_or_create_bb(llvm_fn, target_block);
                 self.builder.build_unconditional_branch(target_block)?;
             }
-            _ => todo!(),
         }
 
         Ok(())
@@ -420,16 +460,8 @@ impl<'ctx> Llvm<'ctx> {
         llvm_fn: &FunctionValue<'ctx>,
         ctx: &FrontendCtx,
     ) -> Result<BasicBlock<'ctx>> {
-        let bb = if self.function_blocks.len() == block.block_id {
-            self.function_blocks[block.block_id - 1]
-        } else {
-            let bb = self
-                .ctx()
-                .append_basic_block(*llvm_fn, &format!("bb{}", block.block_id));
-            self.function_blocks.push(bb);
+        let bb = self.get_or_create_bb(llvm_fn, block.block_id);
 
-            bb
-        };
         self.builder.position_at_end(bb);
 
         for stmt in block.stmts.iter() {

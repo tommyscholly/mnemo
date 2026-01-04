@@ -6,6 +6,7 @@ use crate::span::{DUMMY_SPAN, Spanned};
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ValueKind {
     Int(i32),
+    Bool(bool),
     Ident(Symbol),
 }
 

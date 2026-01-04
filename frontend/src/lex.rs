@@ -47,6 +47,9 @@ pub enum Keyword {
     Char,
     If,
     Else,
+    Bool,
+    True,
+    False,
 }
 
 impl TryFrom<&str> for Keyword {
@@ -57,9 +60,12 @@ impl TryFrom<&str> for Keyword {
             "int" => Ok(Keyword::Int),
             "return" => Ok(Keyword::Return),
             "extern" => Ok(Keyword::Extern),
+            "char" => Ok(Keyword::Char),
             "if" => Ok(Keyword::If),
             "else" => Ok(Keyword::Else),
-            "char" => Ok(Keyword::Char),
+            "bool" => Ok(Keyword::Bool),
+            "true" => Ok(Keyword::True),
+            "false" => Ok(Keyword::False),
             _ => Err(()),
         }
     }

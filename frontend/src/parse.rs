@@ -351,6 +351,14 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
 
     match token.node {
         Token::Int(i) => Ok(Spanned::new(ExprKind::Value(ValueKind::Int(i)), token.span)),
+        Token::Keyword(Keyword::True) => Ok(Spanned::new(
+            ExprKind::Value(ValueKind::Bool(true)),
+            token.span,
+        )),
+        Token::Keyword(Keyword::False) => Ok(Spanned::new(
+            ExprKind::Value(ValueKind::Bool(false)),
+            token.span,
+        )),
 
         Token::Identifier(name) => {
             parse_identifier_expr(ctx, Spanned::new(name, token.span), tokens)
@@ -542,6 +550,11 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
             let span = tokens.pop_front().unwrap().span;
 
             Spanned::new(TypeKind::Int, span)
+        }
+        Some(Token::Keyword(Keyword::Bool)) => {
+            let span = tokens.pop_front().unwrap().span;
+
+            Spanned::new(TypeKind::Bool, span)
         }
         Some(Token::Keyword(Keyword::Char)) => {
             let span = tokens.pop_front().unwrap().span;
@@ -1048,6 +1061,31 @@ mod tests {
         };
         assert!(matches!(ty.as_ref().unwrap().node, TypeKind::Int));
         assert!(matches!(expr.node, ExprKind::Value(ValueKind::Int(1))));
+    }
+
+    #[test]
+    fn constant_bool_parse() {
+        let decs = expect_parse_ok("foo :: false", 1);
+        assert_decl_is_constant(&decs[0], 0, false);
+
+        // Verify the expression is an int literal
+        let DeclKind::Constant { expr, .. } = &decs[0].node else {
+            unreachable!()
+        };
+        assert!(matches!(expr.node, ExprKind::Value(ValueKind::Bool(false))));
+    }
+
+    #[test]
+    fn constant_bool_parse_type_annot() {
+        let decs = expect_parse_ok("foo: bool : true", 1);
+        assert_decl_is_constant(&decs[0], 0, true);
+
+        // Verify the type annotation
+        let DeclKind::Constant { ty, expr, .. } = &decs[0].node else {
+            unreachable!()
+        };
+        assert!(matches!(ty.as_ref().unwrap().node, TypeKind::Bool));
+        assert!(matches!(expr.node, ExprKind::Value(ValueKind::Bool(true))));
     }
 
     #[test]

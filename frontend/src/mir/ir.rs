@@ -104,9 +104,15 @@ impl Place {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Constant {
+    Int(i32),
+    Bool(bool),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Operand {
-    Constant(i32),
+    Constant(Constant),
     Copy(Place),
 }
 
@@ -147,7 +153,7 @@ impl Display for AllocKind {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum RValue {
     Use(Operand),
     BinOp(BinOp, Operand, Operand),
@@ -166,28 +172,27 @@ impl RValue {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Statement {
     // This is in SSA form, so assigning defines a new local
     Assign(LocalId, RValue),
     Phi(LocalId, Vec<LocalId>),
+    Call {
+        function_name: String,
+        args: Vec<RValue>,
+        destination: Option<LocalId>,
+    },
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Terminator {
     Return,
     Br(BlockId),
     // usize is index of the local for the condition
     BrIf(usize, BlockId, BlockId),
-    Call {
-        function_name: String,
-        args: Vec<RValue>,
-        destination: Option<LocalId>,
-        target: BlockId,
-    },
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct BasicBlock {
     pub block_id: BlockId,
     pub stmts: Vec<Statement>,
@@ -205,7 +210,7 @@ impl BasicBlock {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Local {
     pub id: LocalId,
     pub ty: Ty,
@@ -217,7 +222,7 @@ impl Local {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Function {
     pub name: String,
     pub blocks: Vec<BasicBlock>,
@@ -236,14 +241,14 @@ impl IntoIterator for Function {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Extern {
     pub name: String,
     pub params: Vec<Ty>,
     pub return_ty: Ty,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Module {
     pub functions: Vec<Function>,
     pub constants: Vec<RValue>,

@@ -122,6 +122,7 @@ impl ResolveType for Expr {
             ExprKind::Value(v) => match v {
                 ValueKind::Int(_) => Type::synthetic(TypeKind::Int),
                 ValueKind::Ident(i) => ctx.type_map.get(i).unwrap().clone(),
+                ValueKind::Bool(_) => Type::synthetic(TypeKind::Bool),
             },
             ExprKind::BinOp { lhs, rhs, .. } => {
                 let lhs_ty = lhs.resolve_type(ctx);
@@ -306,6 +307,7 @@ impl Typecheck for Expr {
         match &mut self.node {
             ExprKind::Value(v) => match v {
                 ValueKind::Int(_) => Ok(()),
+                ValueKind::Bool(_) => Ok(()),
                 ValueKind::Ident(i) => {
                     if !ctx.type_map.contains_key(i) {
                         return Err(TypeError::new(
@@ -315,6 +317,7 @@ impl Typecheck for Expr {
                     }
                     Ok(())
                 }
+
             },
             ExprKind::BinOp { lhs, rhs, .. } => {
                 lhs.typecheck(ctx)?;
