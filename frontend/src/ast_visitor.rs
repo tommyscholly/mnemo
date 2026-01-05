@@ -519,7 +519,17 @@ impl AstVisitor for AstToMIR<'_> {
                 );
                 self.get_block(current_block_id).terminator = if_transfer;
             }
-            StmtKind::Match(Match { scrutinee, arms }) => todo!(),
+            StmtKind::Match(Match { scrutinee, arms }) => {
+                let scru_local = self.new_local(&TypeKind::Bool);
+                let scru_rvalue = self.visit_expr(scrutinee);
+                let scru_stmt = mir::Statement::Assign(scru_local, scru_rvalue);
+                self.get_current_block().stmts.push(scru_stmt);
+
+                let mut blocks = Vec::new();
+                for arm in arms {
+                    // TODO: visit arm
+                }
+            }
         }
     }
 

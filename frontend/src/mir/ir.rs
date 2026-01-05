@@ -187,11 +187,19 @@ pub enum Statement {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub struct JumpTable {
+    // slight optimization is to, if we have a single match arm, we can just jump to the default
+    default: Option<BlockId>,
+    cases: Vec<(u32, BlockId)>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Terminator {
     Return,
     Br(BlockId),
     // usize is index of the local for the condition
     BrIf(usize, BlockId, BlockId),
+    BrTable(usize, JumpTable),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
