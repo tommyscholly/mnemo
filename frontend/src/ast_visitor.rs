@@ -1,3 +1,4 @@
+use crate::Spanned;
 use crate::ast::*;
 use crate::ctx::{Ctx, Symbol};
 use crate::mir::{self, Function};
@@ -232,6 +233,108 @@ impl<'a> AstToMIR<'a> {
             }
             _ => todo!(),
         }
+    }
+
+    // very similar to rvalue_to_local, but we need to ensure that the type of the local is correct
+    // TOOD: can we unify these two functions?
+    fn ensure_local(&mut self, rvalue: mir::RValue, expected_ty: &TypeKind) -> mir::LocalId {
+        match rvalue {
+            mir::RValue::Use(mir::Operand::Copy(place)) => place.local,
+            mir::RValue::Use(mir::Operand::Constant(_)) => {
+                let ty = ast_type_to_mir_type(expected_ty);
+                let local_id = self.new_local_with_ty(ty);
+                self.get_current_block()
+                    .stmts
+                    .push(mir::Statement::Assign(local_id, rvalue));
+                local_id
+            }
+            _ => todo!(),
+        }
+    }
+
+    fn get_scrutinee_type_and_local(&mut self, scrutinee: Expr) -> (TypeKind, mir::LocalId) {
+        let scru_rvalue = self.visit_expr(scrutinee);
+        let scru_ty = self
+            .local_types
+            .get(&scru_rvalue.place().unwrap().local)
+            .unwrap()
+            .clone();
+        let scru_local = self.ensure_local(scru_rvalue, &scru_ty);
+        (scru_ty, scru_local)
+    }
+
+    fn get_variant_tag(&self, scrutinee_ty: &TypeKind, variant_name: Symbol) -> Option<u8> {
+        match scrutinee_ty {
+            TypeKind::Variant(variants) => {
+                let variant = variants.iter().find(|v| v.name.node == variant_name);
+                variant.map(|v| v.name.node.0 as u8)
+            }
+            _ => None,
+        }
+    }
+
+    fn bind_pattern(&mut self, pat: &Pat, scrutinee_local: mir::LocalId, _scrutinee_ty: &TypeKind) {
+        match &pat.node {
+            PatKind::Symbol(name) => {
+                self.symbol_table.insert(*name, scrutinee_local);
+            }
+            PatKind::Wildcard => {}
+            _ => {}
+        }
+    }
+
+    fn extract_variant_payload(
+        &mut self,
+        scrutinee_local: mir::LocalId,
+        _variant_tag: u8,
+        _binding_pat: &Pat,
+        _scrutinee_ty: &TypeKind,
+    ) -> mir::LocalId {
+        let payload_local = self.new_local(&TypeKind::Int);
+        let place = mir::Place::new(scrutinee_local, mir::PlaceKind::Field(0, mir::Ty::Int));
+        let rvalue = mir::RValue::Use(mir::Operand::Copy(place));
+        self.get_current_block()
+            .stmts
+            .push(mir::Statement::Assign(payload_local, rvalue));
+        payload_local
+    }
+
+    fn get_record_field_index(&self, scrutinee_ty: &TypeKind, field_name: Symbol) -> Option<usize> {
+        match scrutinee_ty {
+            TypeKind::Record(fields) => fields
+                .iter()
+                .enumerate()
+                .find(|(_, f)| f.name == field_name)
+                .map(|(idx, _)| idx),
+            _ => None,
+        }
+    }
+
+    fn extract_record_field(
+        &mut self,
+        scrutinee_local: mir::LocalId,
+        field_idx: usize,
+    ) -> mir::LocalId {
+        let field_ty = self
+            .local_types
+            .get(&scrutinee_local)
+            .and_then(|ty| match ty {
+                TypeKind::Record(fields) => fields.get(field_idx).and_then(|f| f.ty.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| Spanned::new(TypeKind::Int, Default::default()));
+
+        let field_mir_ty = ast_type_to_mir_type(&field_ty.node);
+        let payload_local = self.new_local_with_ty(field_mir_ty.clone());
+        let place = mir::Place::new(
+            scrutinee_local,
+            mir::PlaceKind::Field(field_idx, field_mir_ty),
+        );
+        let rvalue = mir::RValue::Use(mir::Operand::Copy(place));
+        self.get_current_block()
+            .stmts
+            .push(mir::Statement::Assign(payload_local, rvalue));
+        payload_local
     }
 
     pub fn produce_module(mut self) -> mir::Module {
@@ -520,15 +623,83 @@ impl AstVisitor for AstToMIR<'_> {
                 self.get_block(current_block_id).terminator = if_transfer;
             }
             StmtKind::Match(Match { scrutinee, arms }) => {
-                let scru_local = self.new_local(&TypeKind::Bool);
-                let scru_rvalue = self.visit_expr(scrutinee);
-                let scru_stmt = mir::Statement::Assign(scru_local, scru_rvalue);
-                self.get_current_block().stmts.push(scru_stmt);
+                let (scru_ty, scru_local) = self.get_scrutinee_type_and_local(scrutinee);
 
-                let mut blocks = Vec::new();
+                let current_block_id = self.current_block;
+
+                let mut arm_infos = Vec::new();
+                let mut cases = Vec::new();
+                let mut default_arm_block_id = None;
+
                 for arm in arms {
-                    // TODO: visit arm
+                    let arm_block_id = self.current_block + 1;
+                    let mut arm_block = mir::BasicBlock::new(arm_block_id);
+                    arm_block.terminator = mir::Terminator::Br(arm_block_id + 1);
+                    self.get_current_function().blocks.push(arm_block);
+
+                    match &arm.pat.node {
+                        PatKind::Variant { name, bindings } => {
+                            if let Some(tag) = self.get_variant_tag(&scru_ty, *name) {
+                                cases.push((tag as u32, arm_block_id));
+
+                                if !bindings.is_empty() {
+                                    let payload_local = self.extract_variant_payload(
+                                        scru_local,
+                                        tag,
+                                        &bindings[0],
+                                        &scru_ty,
+                                    );
+                                    self.bind_pattern(&bindings[0], payload_local, &scru_ty);
+                                }
+                            }
+                        }
+                        PatKind::Wildcard => {
+                            default_arm_block_id = Some(arm_block_id);
+                        }
+                        PatKind::Symbol(_) => {
+                            self.bind_pattern(&arm.pat, scru_local, &scru_ty);
+                            default_arm_block_id = Some(arm_block_id);
+                        }
+                        PatKind::Record(fields) => {
+                            for field in fields {
+                                let field_idx = self.get_record_field_index(&scru_ty, field.name);
+                                if let Some(idx) = field_idx {
+                                    let field_local = self.extract_record_field(scru_local, idx);
+                                    self.symbol_table.insert(field.name, field_local);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    self.current_block = arm_block_id;
+                    self.visit_block(arm.body);
+                    arm_infos.push((arm_block_id, self.current_block));
                 }
+
+                let join_block_id = self.current_block + 1;
+                let join_block = mir::BasicBlock::new(join_block_id);
+                self.get_current_function().blocks.push(join_block);
+
+                let phi_functions_to_generate = std::mem::take(&mut self.phi_functions_to_generate);
+                for (local_id, phi_ids) in phi_functions_to_generate {
+                    let phi = mir::Statement::Phi(local_id, phi_ids);
+                    self.get_current_block().stmts.push(phi);
+                }
+
+                for (_, arm_end_id) in &arm_infos {
+                    self.get_block(*arm_end_id).terminator = mir::Terminator::Br(join_block_id);
+                }
+
+                let jump_table = mir::JumpTable {
+                    default: default_arm_block_id.or(Some(join_block_id)),
+                    cases,
+                };
+
+                let br_table = mir::Terminator::BrTable(scru_local, jump_table);
+                self.get_block(current_block_id).terminator = br_table;
+
+                self.current_block = join_block_id;
             }
         }
     }

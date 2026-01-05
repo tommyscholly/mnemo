@@ -188,9 +188,8 @@ pub enum Statement {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct JumpTable {
-    // slight optimization is to, if we have a single match arm, we can just jump to the default
-    default: Option<BlockId>,
-    cases: Vec<(u32, BlockId)>,
+    pub default: Option<BlockId>,
+    pub cases: Vec<(u32, BlockId)>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

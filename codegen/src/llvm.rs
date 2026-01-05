@@ -483,6 +483,7 @@ impl<'ctx> Llvm<'ctx> {
                 let target_block = self.get_or_create_bb(llvm_fn, target_block);
                 self.builder.build_unconditional_branch(target_block)?;
             }
+            mir::Terminator::BrTable(local_id, jump_table) => todo!(),
         }
 
         Ok(())

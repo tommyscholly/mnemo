@@ -31,7 +31,7 @@ impl Diagnostic for TypeError {
     }
 
     fn message(&self) -> String {
-        "type error".to_string()
+        format!("type error {:?}", self.kind)
     }
 
     fn label(&self) -> Option<String> {
@@ -570,7 +570,9 @@ impl Typecheck for Stmt {
             }
             StmtKind::Call(c) => type_check_call(c, ctx)?,
             StmtKind::Match(Match { scrutinee, arms }) => {
+                println!("typechecking match");
                 scrutinee.typecheck(ctx)?;
+                println!("resolved scrutinee");
                 let scrutinee_ty = scrutinee.resolve_type(ctx);
                 for arm in arms {
                     match &arm.pat.node {
@@ -589,6 +591,7 @@ impl Typecheck for Stmt {
 
                             let Some(variant) = vfields.iter().find(|v| v.name.node == *name)
                             else {
+                                println!("variant not found");
                                 return Err(TypeError::new(
                                     TypeErrorKind::UnknownSymbol(*name),
                                     arm.pat.span.clone(),
@@ -596,6 +599,7 @@ impl Typecheck for Stmt {
                             };
 
                             if bindings.len() != variant.adts.len() {
+                                println!("variant adts len mismatch");
                                 return Err(TypeError::new(
                                     // TODO: better error message
                                     TypeErrorKind::ExpectedVariant,
@@ -604,8 +608,10 @@ impl Typecheck for Stmt {
                             }
 
                             for (binding, adt) in bindings.iter().zip(variant.adts.iter()) {
+                                println!("binding adt");
                                 bind_pattern(binding, adt, ctx)?;
                             }
+                            println!("done binding");
                         }
                         PatKind::Record(fields) => {
                             let TypeKind::Record(scru_fields) = &scrutinee_ty.node else {
@@ -630,7 +636,9 @@ impl Typecheck for Stmt {
                         _ => todo!(),
                     }
 
+                    println!("typechecking arm body");
                     arm.body.typecheck(ctx)?;
+                    println!("done typechecking arm body");
                 }
             }
         }

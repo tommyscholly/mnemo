@@ -56,6 +56,16 @@ impl MIRVisualizer for Terminator {
                     cond_local_id, then_block_id, else_block_id
                 )
             }
+            Terminator::BrTable(_, jump_table) => {
+                print!("br_table");
+                for (tag, target) in &jump_table.cases {
+                    print!(" {} => {}", tag, target);
+                }
+                if let Some(default) = jump_table.default {
+                    print!(" default => {}", default);
+                }
+                println!();
+            }
         }
     }
 }

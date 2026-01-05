@@ -819,40 +819,40 @@ fn parse_pat(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<
 
             Ok(Spanned::new(PatKind::Tuple(patterns), span))
         }
-        Token::LBrace => {
-            let start_span = expect_next(tokens, Token::LBrace)?;
-            let mut fields = Vec::new();
-
-            loop {
-                if let Some(Token::RBrace) = peek_token(tokens) {
-                    break;
-                }
-
-                let field_name = expect_identifier(tokens)?;
-                let ty = parse_type_annot(ctx, tokens)?;
-
-                fields.push(RecordField {
-                    name: field_name.node,
-                    ty,
-                });
-
-                if let Some(Token::Comma) = peek_token(tokens) {
-                    tokens.pop_front();
-
-                    if let Some(Token::DotDot) = peek_token(tokens) {
-                        tokens.pop_front();
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-
-            let end_span = expect_next(tokens, Token::RBrace)?;
-
-            let span = start_span.merge(&end_span);
-            Ok(Spanned::new(PatKind::Record(fields), span))
-        }
+        // Token::LBrace => {
+        //     let start_span = expect_next(tokens, Token::LBrace)?;
+        //     let mut fields = Vec::new();
+        //
+        //     loop {
+        //         if let Some(Token::RBrace) = peek_token(tokens) {
+        //             break;
+        //         }
+        //
+        //         let field_name = expect_identifier(tokens)?;
+        //         let ty = parse_type_annot(ctx, tokens)?;
+        //
+        //         fields.push(RecordField {
+        //             name: field_name.node,
+        //             ty,
+        //         });
+        //
+        //         if let Some(Token::Comma) = peek_token(tokens) {
+        //             tokens.pop_front();
+        //
+        //             if let Some(Token::DotDot) = peek_token(tokens) {
+        //                 tokens.pop_front();
+        //                 break;
+        //             }
+        //         } else {
+        //             break;
+        //         }
+        //     }
+        //
+        //     let end_span = expect_next(tokens, Token::RBrace)?;
+        //
+        //     let span = start_span.merge(&end_span);
+        //     Ok(Spanned::new(PatKind::Record(fields), span))
+        // }
         _ => Err(ParseError::new(
             ParseErrorKind::ExpectedPattern,
             token.span.clone(),
