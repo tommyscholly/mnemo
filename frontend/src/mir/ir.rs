@@ -8,16 +8,17 @@ pub type BlockId = usize;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Ty {
+    Array(Box<Ty>, usize),
     Bool,
     Char,
-    Int,
-    Unit,
-    Array(Box<Ty>, usize),
     DynArray(Box<Ty>),
-    Tuple(Vec<Ty>),
+    Int,
     Ptr(Box<Ty>),
-    TaggedUnion(Vec<(u8, Ty)>),
     Record(Vec<Ty>),
+    Str,
+    TaggedUnion(Vec<(u8, Ty)>),
+    Tuple(Vec<Ty>),
+    Unit,
 }
 
 impl Ty {
@@ -25,6 +26,7 @@ impl Ty {
         match self {
             Ty::Bool => 1,
             Ty::Char => 1,
+            Ty::Str => 1,
             Ty::Int => 4,
             Ty::Unit => 0,
             Ty::Array(ty, len) => ty.bytes() * *len,
@@ -54,6 +56,7 @@ impl Ty {
         match self {
             Ty::Bool => 1,
             Ty::Char => 1,
+            Ty::Str => 1,
             Ty::Int => 4,
             Ty::Unit => 1,
             Ty::Array(ty, _) => ty.align(),
@@ -79,6 +82,7 @@ impl Display for Ty {
             Ty::Bool => write!(f, "bool"),
             Ty::Char => write!(f, "char"),
             Ty::Int => write!(f, "int"),
+            Ty::Str => write!(f, "str"),
             Ty::Unit => write!(f, "unit"),
             Ty::Array(ty, len) => write!(f, "[{}]{{ {} }}", ty, len),
             Ty::DynArray(ty) => write!(f, "dyn{{ {} }}", ty),
@@ -155,8 +159,9 @@ pub enum Operand {
 pub enum AllocKind {
     Array(Ty),
     DynArray(Ty),
-    Tuple(Vec<Ty>),
     Record(Vec<Ty>),
+    Str(String),
+    Tuple(Vec<Ty>),
     Variant(u8, Ty),
 }
 
@@ -174,6 +179,7 @@ impl Display for AllocKind {
                 write!(f, "{}", ty_str)
             }
             AllocKind::DynArray(ty) => write!(f, "dyn_array<{}>", ty),
+            AllocKind::Str(s) => write!(f, "str<{}>", s),
             AllocKind::Record(tys) => {
                 let ty_str = tys
                     .iter()

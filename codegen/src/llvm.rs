@@ -122,6 +122,7 @@ impl<'ctx> Llvm<'ctx> {
 
                 ctx.struct_type(&field_tys, false).as_basic_type_enum()
             }
+            mir::Ty::Str => ctx.ptr_type(AddressSpace::default()).as_basic_type_enum(),
             ty => panic!("unimplemented type {:?}", ty),
         }
     }
@@ -147,6 +148,10 @@ impl<'ctx> Llvm<'ctx> {
                 .ptr_type(AddressSpace::default())
                 .fn_type(&param_types, false),
 
+            mir::Ty::Array(ty, len) => {
+                let ty = Self::basic_type_to_llvm_basic_type(ctx, ty);
+                ty.array_type(*len as u32).fn_type(&param_types, false)
+            }
             _ => todo!(),
         }
     }
@@ -420,6 +425,10 @@ impl<'ctx> Llvm<'ctx> {
                         self.builder
                             .build_load(struct_ty, struct_ptr, "struct_load")?
                     }
+                    AllocKind::Str(s) => self
+                        .builder
+                        .build_global_string_ptr(s, format!("str_{}", s).as_str())?
+                        .as_pointer_value().as_basic_value_enum(),
                     a => panic!("unimplemented alloc kind {:?}", a),
                 }
             }

@@ -21,6 +21,7 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
             AllocKind::Array(ty, len) => mir::Ty::Array(Box::new(ast_type_to_mir_type(ty)), *len),
             AllocKind::Record(_) => unreachable!(),
             AllocKind::Variant(_) => unreachable!(),
+            AllocKind::Str(_) => mir::Ty::Str,
         },
         TypeKind::Ptr(ty) => mir::Ty::Ptr(Box::new(ast_type_to_mir_type(ty))),
         TypeKind::Char => mir::Ty::Char,
@@ -517,6 +518,7 @@ impl AstVisitor for AstToMIR<'_> {
 
                         mir::RValue::Alloc(mir::AllocKind::Variant(variant_id, ty.clone()), ops)
                     }
+                    AllocKind::Str(s) => mir::RValue::Alloc(mir::AllocKind::Str(s), ops),
                 }
             }
             ExprKind::FieldAccess(expr, field_name) => {

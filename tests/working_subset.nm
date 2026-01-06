@@ -2,15 +2,16 @@ printf :: extern (fmt_string: ^char, int_param: int)
 print_bool :: extern (bool_param: bool)
 print_int :: extern (int_param: int)
 make_fmt_str :: extern () : ^char
+puts :: extern (s: ^char)
 
-// allocation_function :: () : [2]{int} @ R
-// // allocates introduces a new region `R` that the function may allocate in
-//   with allocates @ R
-// {
-//     alloc := [2]{ 1, 2 } @ R
-//
-//     return alloc
-// }
+allocation_function :: () : [2]{int} @ R
+// allocates introduces a new region `R` that the function may allocate in
+  with allocates @ R
+{
+    alloc := [2]{ 1, 2 } @ R
+
+    return alloc
+}
 
 return_int :: () : int {
     return 69420
@@ -63,6 +64,10 @@ main :: () {
     region_alloc := [2]{ 3, 4 } @ local
 
     print_int(return_int())
+
+    string := "hello world\n"
+    puts(string)
+
 
     // dyn_array := [] { 1, 2 }
 }

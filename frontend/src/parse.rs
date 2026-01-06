@@ -441,6 +441,14 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
             ExprKind::Value(ValueKind::Bool(false)),
             token.span,
         )),
+        Token::String(s) => Ok(Spanned::new(
+            ExprKind::Allocation {
+                kind: AllocKind::Str(s),
+                elements: vec![],
+                region: None,
+            },
+            token.span,
+        )),
 
         Token::Identifier(name) => {
             parse_identifier_expr(ctx, Spanned::new(name, token.span), tokens)

@@ -234,15 +234,7 @@ fn type_check_call(call: &mut Call, ctx: &mut TypecheckCtx) -> TypecheckResult<(
         .zip(callee_signature.node.params.types.iter())
     {
         let arg_ty = arg.resolve_type(ctx);
-        if ty.node != arg_ty.node {
-            return Err(TypeError::new(
-                TypeErrorKind::ExpectedType {
-                    expected: ty.node.clone(),
-                    found: arg_ty.node,
-                },
-                arg.span.clone(),
-            ));
-        }
+        structural_typecheck(&arg_ty.node, &ty.node, arg_ty.span)?;
     }
 
     if let Some(returned_ty) = &call.returned_ty {
@@ -413,6 +405,7 @@ impl Typecheck for Expr {
                     AllocKind::Variant(variant_name) => {
                         // TOOD: is there any variant to check here?
                     }
+                    AllocKind::Str(_) => {}
                     _ => todo!(),
                 }
                 Ok(())
@@ -538,7 +531,7 @@ fn structural_typecheck(
                 }
             }
         }
-
+        (TypeKind::Alloc(AllocKind::Str(_), _), TypeKind::Ptr(c)) if (**c) == TypeKind::Char => {}
         _ => {
             if declared_ty != expr_ty {
                 return Err(TypeError::new(

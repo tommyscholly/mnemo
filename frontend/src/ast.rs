@@ -5,9 +5,9 @@ use crate::span::{DUMMY_SPAN, Spanned};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ValueKind {
-    Int(i32),
     Bool(bool),
     Ident(Symbol),
+    Int(i32),
 }
 
 #[allow(unused)]
@@ -46,18 +46,17 @@ pub enum TypeAliasDefinition {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TypeKind {
-    Unit,
-    Int,
+    Alloc(AllocKind, Region),
     Bool,
     Char,
-    TypeAlias(Symbol),
-    Record(Vec<RecordField>),
-    Variant(Vec<VariantField>),
-
     Fn(Box<SignatureInner>),
-    Alloc(AllocKind, Region),
+    Int,
     // all ptrs must be qualified with a region (at some point)
     Ptr(Box<TypeKind> /*, Region */),
+    Record(Vec<RecordField>),
+    TypeAlias(Symbol),
+    Unit,
+    Variant(Vec<VariantField>),
 }
 
 pub type Type = Spanned<TypeKind>;
@@ -74,10 +73,11 @@ impl Type {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum AllocKind {
-    DynArray(Box<TypeKind>),
     Array(Box<TypeKind>, usize),
-    Tuple(Vec<TypeKind>),
+    DynArray(Box<TypeKind>),
     Record(Vec<RecordField>),
+    Str(String),
+    Tuple(Vec<TypeKind>),
     Variant(Symbol),
 }
 
@@ -209,7 +209,6 @@ pub enum Constraint {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DeclKind {
-    // name :: int
     Extern {
         name: Spanned<Symbol>,
         sig: Signature,

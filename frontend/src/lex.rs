@@ -41,18 +41,18 @@ impl Diagnostic for LexError {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Keyword {
-    Int,
-    Return,
-    Extern,
-    Char,
-    If,
-    Else,
-    Bool,
-    True,
-    False,
-    Match,
-    With,
     Allocates,
+    Bool,
+    Char,
+    Else,
+    Extern,
+    False,
+    If,
+    Int,
+    Match,
+    Return,
+    True,
+    With,
 }
 
 impl TryFrom<&str> for Keyword {
@@ -79,33 +79,34 @@ impl TryFrom<&str> for Keyword {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Token {
-    Identifier(Symbol),
-    Keyword(Keyword),
-    BinOp(BinOp),
-    Int(i32),
-    Colon,
-    Eq,
-    /// (
-    LParen,
-    /// )
-    RParen,
-    /// {
-    LBrace,
-    /// }
-    RBrace,
-    /// [
-    LBracket,
-    /// ]
-    RBracket,
-    Comma,
-    SemiColon,
     Arrow,
-    FatArrow,
     At,
+    Bar,
+    BinOp(BinOp),
+    Caret,
+    Colon,
+    Comma,
     Dot,
     DotDot,
-    Caret,
-    Bar,
+    Eq,
+    FatArrow,
+    Identifier(Symbol),
+    Int(i32),
+    Keyword(Keyword),
+    /// {
+    LBrace,
+    /// [
+    LBracket,
+    /// (
+    LParen,
+    /// }
+    RBrace,
+    /// ]
+    RBracket,
+    /// )
+    RParen,
+    SemiColon,
+    String(String),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -208,45 +209,19 @@ impl<'a, T: Iterator<Item = LexItem>> Lexer<'a, T> {
                         advance_single_token!(self, Token::BinOp(BinOp::Div))
                     }
                 }
-                '^' => {
-                    advance_single_token!(self, Token::Caret)
-                }
-                '@' => {
-                    advance_single_token!(self, Token::At)
-                }
-                ';' => {
-                    advance_single_token!(self, Token::SemiColon)
-                }
-                ':' => {
-                    advance_single_token!(self, Token::Colon)
-                }
-                '(' => {
-                    advance_single_token!(self, Token::LParen)
-                }
-                ')' => {
-                    advance_single_token!(self, Token::RParen)
-                }
-                '{' => {
-                    advance_single_token!(self, Token::LBrace)
-                }
-                '}' => {
-                    advance_single_token!(self, Token::RBrace)
-                }
-                '[' => {
-                    advance_single_token!(self, Token::LBracket)
-                }
-                ']' => {
-                    advance_single_token!(self, Token::RBracket)
-                }
-                ',' => {
-                    advance_single_token!(self, Token::Comma)
-                }
-                '.' => {
-                    handle_operator!(self, '.', '.', Token::Dot, Token::DotDot)
-                }
-                '|' => {
-                    advance_single_token!(self, Token::Bar)
-                }
+                '^' => advance_single_token!(self, Token::Caret),
+                '@' => advance_single_token!(self, Token::At),
+                ';' => advance_single_token!(self, Token::SemiColon),
+                ':' => advance_single_token!(self, Token::Colon),
+                '(' => advance_single_token!(self, Token::LParen),
+                ')' => advance_single_token!(self, Token::RParen),
+                '{' => advance_single_token!(self, Token::LBrace),
+                '}' => advance_single_token!(self, Token::RBrace),
+                '[' => advance_single_token!(self, Token::LBracket),
+                ']' => advance_single_token!(self, Token::RBracket),
+                ',' => advance_single_token!(self, Token::Comma),
+                '.' => handle_operator!(self, '.', '.', Token::Dot, Token::DotDot),
+                '|' => advance_single_token!(self, Token::Bar),
                 '=' => {
                     self.chars.next();
                     self.current += 1;
@@ -289,13 +264,90 @@ impl<'a, T: Iterator<Item = LexItem>> Lexer<'a, T> {
                         Token::BinOp(BinOp::LtEq)
                     )
                 }
-                '-' => {
-                    handle_operator!(self, '-', '>', Token::BinOp(BinOp::Sub), Token::Arrow)
-                }
+                '-' => handle_operator!(self, '-', '>', Token::BinOp(BinOp::Sub), Token::Arrow),
                 ' ' | '\t' | '\n' | '\r' => {
                     self.chars.next();
                     self.start += 1;
                     self.current += 1;
+                }
+                '"' => {
+                    self.chars.next();
+                    self.current += 1;
+                    let mut string = String::new();
+                    loop {
+                        match self.chars.peek() {
+                            Some('"') => {
+                                self.chars.next();
+                                self.current += 1;
+                                break;
+                            }
+                            Some('\\') => {
+                                // Handle escape sequences
+                                self.chars.next();
+                                self.current += 1;
+                                match self.chars.peek() {
+                                    Some('n') => {
+                                        string.push('\n');
+                                        self.chars.next();
+                                        self.current += 1;
+                                    }
+                                    Some('t') => {
+                                        string.push('\t');
+                                        self.chars.next();
+                                        self.current += 1;
+                                    }
+                                    Some('r') => {
+                                        string.push('\r');
+                                        self.chars.next();
+                                        self.current += 1;
+                                    }
+                                    Some('\\') => {
+                                        string.push('\\');
+                                        self.chars.next();
+                                        self.current += 1;
+                                    }
+                                    Some('"') => {
+                                        string.push('"');
+                                        self.chars.next();
+                                        self.current += 1;
+                                    }
+                                    Some('0') => {
+                                        string.push('\0');
+                                        self.chars.next();
+                                        self.current += 1;
+                                    }
+                                    Some(c) => {
+                                        // For unsupported escape sequences, just include the backslash and character
+                                        string.push('\\');
+                                        string.push(*c);
+                                        self.chars.next();
+                                        self.current += 1;
+                                    }
+                                    None => {
+                                        return Err(LexError::new(
+                                            LexErrorKind::UnexpectedEOF,
+                                            self.current..self.current,
+                                        ));
+                                    }
+                                }
+                            }
+                            Some(c) => {
+                                string.push(*c);
+                                self.chars.next();
+                                self.current += 1;
+                            }
+                            None => {
+                                return Err(LexError::new(
+                                    LexErrorKind::UnexpectedEOF,
+                                    self.current..self.current,
+                                ));
+                            }
+                        }
+                    }
+
+                    let span = self.start..self.current;
+                    self.start = self.current;
+                    return Ok(Spanned::new(Token::String(string), span));
                 }
                 c => {
                     if c.is_ascii_digit() {
