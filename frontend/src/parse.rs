@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 
 use crate::ast::{
     AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Match, MatchArm,
-    Module, Params, Pat, PatKind, RecordField, Signature, SignatureInner, Stmt, StmtKind, Type,
-    TypeAliasDefinition, TypeKind, ValueKind, VariantField,
+    Module, Params, Pat, PatKind, RecordField, Region, Signature, SignatureInner, Stmt, StmtKind,
+    Type, TypeAliasDefinition, TypeKind, ValueKind, VariantField,
 };
 use crate::ctx::{Ctx, Symbol};
 use crate::lex::{BinOp, Keyword, Token};
@@ -17,6 +17,8 @@ pub struct ParseError {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseErrorKind {
+    ExpectedRegion,
+    CannotAllocateInRegion,
     ExpectedIdentifier,
     MalformedAccess,
     ExpectedType,
@@ -86,9 +88,63 @@ fn peek_span(tokens: &VecDeque<SpannedToken>) -> Option<Span> {
     tokens.front().map(|t| t.span.clone())
 }
 
+fn parse_potential_region_alloc(
+    ctx: &mut Ctx,
+    mut expr: Expr,
+    tokens: &mut VecDeque<SpannedToken>,
+) -> ParseResult<Expr> {
+    if let Some(Token::At) = peek_token(tokens) {
+        let at_span = tokens.pop_front().unwrap().span;
+        let region_expr = parse_expr(ctx, tokens)?;
+        let span = at_span.merge(&region_expr.span);
+
+        if let ExprKind::Allocation {
+            kind: _,
+            elements: _,
+            region,
+        } = &mut expr.node
+        {
+            let region_kind = match region_expr.node {
+                ExprKind::Value(ValueKind::Ident(name)) => {
+                    if ctx.resolve(name) == "local" {
+                        Region::Local
+                    } else {
+                        Region::Generic(name)
+                    }
+                }
+                _ => {
+                    eprintln!("region expr: {:#?}", region_expr.node);
+                    return Err(ParseError::new(
+                        ParseErrorKind::ExpectedRegion,
+                        region_expr.span,
+                    ));
+                }
+            };
+
+            *region = Some(region_kind);
+        } else {
+            return Err(ParseError::new(
+                ParseErrorKind::CannotAllocateInRegion,
+                expr.span,
+            ));
+        }
+
+        expr.span = span;
+    }
+
+    Ok(expr)
+}
+
 fn parse_expr(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
     let expr = parse_logical_or(ctx, tokens)?;
-    Ok(expr)
+    if !ctx.parsing_region {
+        ctx.parsing_region = true;
+        let expr = parse_potential_region_alloc(ctx, expr, tokens);
+        ctx.parsing_region = false;
+        expr
+    } else {
+        Ok(expr)
+    }
 }
 
 fn parse_logical_or(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Expr> {
@@ -306,7 +362,7 @@ fn parse_identifier_expr(
 ) -> ParseResult<Expr> {
     let ident_name = ctx.resolve(ident.node);
     let first_char = ident_name.chars().next().unwrap();
-    let is_variant = first_char.is_ascii_uppercase();
+    let is_variant = first_char.is_ascii_uppercase() && !ctx.parsing_region;
     if let Some(Token::LParen) = peek_token(tokens) {
         let lparen_span = tokens.pop_front().unwrap().span;
         let mut args = Vec::new();
@@ -1172,6 +1228,7 @@ fn parse_decls(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResul
 
 pub fn parse(ctx: &mut Ctx, tokens: VecDeque<SpannedToken>) -> ParseResult<Module> {
     let mut tokens = tokens;
+
     let decls = parse_decls(ctx, &mut tokens)?;
 
     let module = Module {
@@ -1891,5 +1948,43 @@ mod tests {
             matches!(&pat.node, PatKind::Variant { name, bindings } if *name == Symbol(4) && bindings.is_empty())
         );
         assert_eq!(body.node.stmts.len(), 1);
+    }
+
+    #[test]
+    fn parse_region_alloc() {
+        let decs = expect_parse_ok(
+            "foo :: () { 
+            x := [2]{ 1, 2 } @ local
+            y := (1, false) @ R
+        }",
+            1,
+        );
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            unreachable!()
+        };
+
+        let StmtKind::ValDec { expr, .. } = &block.node.stmts[0].node else {
+            unreachable!()
+        };
+
+        let ExprKind::Allocation { kind, region, .. } = &expr.node else {
+            panic!("expected allocation")
+        };
+
+        assert_eq!(*kind, AllocKind::Array(TypeKind::Int.into(), 2));
+        assert_eq!(*region, Some(Region::Local));
+
+        let StmtKind::ValDec { expr, .. } = &block.node.stmts[1].node else {
+            unreachable!()
+        };
+
+        let ExprKind::Allocation { kind, region, .. } = &expr.node else {
+            panic!("expected allocation")
+        };
+        // types not resolved yet
+        assert_eq!(*kind, AllocKind::Tuple(vec![]));
+        assert_eq!(*region, Some(Region::Generic(Symbol(4))));
     }
 }

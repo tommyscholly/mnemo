@@ -47,5 +47,7 @@ main :: () {
       | 2 => { printf(fmt_string, 2) }
       | _ => { printf(fmt_string, 999) }
 
+    region_alloc := [2]{ 3, 4 } @ local
+
     // dyn_array := [] { 1, 2 }
 }

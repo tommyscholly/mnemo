@@ -23,10 +23,12 @@ impl From<u32> for Symbol {
     }
 }
 
+// technically this should be in parse.rs
 #[derive(Debug, Default)]
 pub struct Ctx {
     strings: Vec<String>,
     indices: HashMap<String, Symbol>,
+    pub parsing_region: bool,
 }
 
 impl Ctx {
