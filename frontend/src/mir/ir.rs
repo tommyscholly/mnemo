@@ -222,7 +222,7 @@ pub enum Statement {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct JumpTable {
     pub default: BlockId,
-    pub cases: Vec<(u32, BlockId)>,
+    pub cases: Vec<(i32, BlockId)>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

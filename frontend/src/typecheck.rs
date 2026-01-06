@@ -626,6 +626,20 @@ impl Typecheck for Stmt {
                                 ctx.type_map.insert(field.name, field.ty.clone().unwrap());
                             }
                         }
+                        PatKind::Literal(lit) => match lit {
+                            ValueKind::Int(_) => {
+                                if scrutinee_ty.node != TypeKind::Int {
+                                    return Err(TypeError::new(
+                                        TypeErrorKind::ExpectedType {
+                                            expected: TypeKind::Int,
+                                            found: scrutinee_ty.node.clone(),
+                                        },
+                                        scrutinee_ty.span.clone(),
+                                    ));
+                                }
+                            }
+                            _ => todo!(),
+                        },
                         PatKind::Wildcard => {}
                         _ => todo!(),
                     }

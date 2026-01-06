@@ -37,5 +37,15 @@ main :: () {
         Some(x) => { printf(fmt_string, x) }
       | None    => { printf(fmt_string, 0) }
 
+    match typed_int with
+        1 => { printf(fmt_string, 1) }
+      | 2 => { printf(fmt_string, 2) }
+      | _ => { printf(fmt_string, 999) }
+
+    match 3 with
+        1 => { printf(fmt_string, 1) }
+      | 2 => { printf(fmt_string, 2) }
+      | _ => { printf(fmt_string, 999) }
+
     // dyn_array := [] { 1, 2 }
 }

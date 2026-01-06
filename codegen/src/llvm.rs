@@ -20,6 +20,7 @@ use crate::Compiler;
 
 struct FunctionLocalInfo<'ctx> {
     ty: BasicTypeEnum<'ctx>,
+    tk: mir::Ty,
     alloc: PointerValue<'ctx>,
     defining_block: BasicBlock<'ctx>,
 }
@@ -27,11 +28,13 @@ struct FunctionLocalInfo<'ctx> {
 impl<'ctx> FunctionLocalInfo<'ctx> {
     fn new(
         ty: BasicTypeEnum<'ctx>,
+        tk: mir::Ty,
         alloc: PointerValue<'ctx>,
         defining_block: BasicBlock<'ctx>,
     ) -> Self {
         Self {
             ty,
+            tk,
             alloc,
             defining_block,
         }
@@ -515,19 +518,38 @@ impl<'ctx> Llvm<'ctx> {
             }
             mir::Terminator::BrTable(local_id, jump_table) => {
                 let jump_local_info = self.function_locals.get(&local_id).unwrap();
+                let (jump_val, switch_type) = match jump_local_info.tk {
+                    mir::Ty::Int => {
+                        let switch_type = self.ctx().i32_type();
 
-                let jump_ptr = self.builder.build_struct_gep(
-                    jump_local_info.ty,
-                    jump_local_info.alloc,
-                    0,
-                    "jump_ptr",
-                )?;
+                        let jump_val = self
+                            .builder
+                            .build_load(switch_type, jump_local_info.alloc, "jump_val")
+                            .unwrap()
+                            .into_int_value();
 
-                let jump_val = self
-                    .builder
-                    .build_load(self.ctx().i8_type(), jump_ptr, "jump_val")
-                    .unwrap()
-                    .into_int_value();
+                        (jump_val, switch_type)
+                    }
+                    mir::Ty::TaggedUnion(_) => {
+                        let switch_type = self.ctx().i8_type();
+
+                        let jump_ptr = self.builder.build_struct_gep(
+                            jump_local_info.ty,
+                            jump_local_info.alloc,
+                            0,
+                            "jump_ptr",
+                        )?;
+
+                        let jump_val = self
+                            .builder
+                            .build_load(switch_type, jump_ptr, "jump_val")
+                            .unwrap()
+                            .into_int_value();
+
+                        (jump_val, switch_type)
+                    }
+                    _ => todo!(),
+                };
 
                 let default_bb = self.get_or_create_bb(llvm_fn, jump_table.default);
 
@@ -535,7 +557,7 @@ impl<'ctx> Llvm<'ctx> {
                 for (val, block_id) in jump_table.cases {
                     let bb = self.get_or_create_bb(llvm_fn, block_id);
 
-                    let val = self.ctx().i8_type().const_int(val as u64, false);
+                    let val = switch_type.const_int(val as u64, false);
                     cases.push((val, bb));
                 }
 
@@ -591,7 +613,8 @@ impl<'ctx> Llvm<'ctx> {
                 .builder
                 .build_alloca(local_ty, format!("x{}", local.id).as_str())?;
 
-            let local_info = FunctionLocalInfo::new(local_ty, local_alloca, entry_block);
+            let local_info =
+                FunctionLocalInfo::new(local_ty, local.ty.clone(), local_alloca, entry_block);
             self.function_locals.insert(local.id, local_info);
         }
 

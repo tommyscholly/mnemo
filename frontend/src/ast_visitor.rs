@@ -254,13 +254,31 @@ impl<'a> AstToMIR<'a> {
 
     fn get_scrutinee_type_and_local(&mut self, scrutinee: Expr) -> (TypeKind, mir::LocalId) {
         let scru_rvalue = self.visit_expr(scrutinee);
-        let scru_ty = self
-            .local_types
-            .get(&scru_rvalue.place().unwrap().local)
-            .unwrap()
-            .clone();
-        let scru_local = self.ensure_local(scru_rvalue, &scru_ty);
-        (scru_ty, scru_local)
+        match &scru_rvalue.place() {
+            Some(place) => {
+                let scru_ty = self.local_types.get(&place.local).unwrap().clone();
+                let scru_local = self.ensure_local(scru_rvalue, &scru_ty);
+                (scru_ty, scru_local)
+            }
+            None => {
+                // need to load this into memory now
+                match &scru_rvalue {
+                    mir::RValue::Use(mir::Operand::Constant(cnst)) => {
+                        let scru_ty = match cnst {
+                            mir::Constant::Int(_) => TypeKind::Int,
+                            mir::Constant::Bool(_) => TypeKind::Bool,
+                        };
+
+                        let scru_local = self.new_local(&scru_ty);
+                        self.get_current_block()
+                            .stmts
+                            .push(mir::Statement::Assign(scru_local, scru_rvalue));
+                        (scru_ty, scru_local)
+                    }
+                    _ => todo!(),
+                }
+            }
+        }
     }
 
     fn get_variant_tag(&self, scrutinee_ty: &TypeKind, variant_name: Symbol) -> Option<u8> {
@@ -655,7 +673,7 @@ impl AstVisitor for AstToMIR<'_> {
                     match &arm.pat.node {
                         PatKind::Variant { name, bindings } => {
                             if let Some(tag) = self.get_variant_tag(&scru_ty, *name) {
-                                cases.push((tag as u32, arm_block_id));
+                                cases.push((tag as i32, arm_block_id));
 
                                 if !bindings.is_empty() {
                                     let idx = self.get_variant_index(&scru_ty, *name).unwrap();
@@ -677,15 +695,21 @@ impl AstVisitor for AstToMIR<'_> {
                             self.bind_pattern(&arm.pat, scru_local, &scru_ty);
                             default_arm_block_id = Some(arm_block_id);
                         }
-                        PatKind::Record(fields) => {
-                            for field in fields {
-                                let field_idx = self.get_record_field_index(&scru_ty, field.name);
-                                if let Some(idx) = field_idx {
-                                    let field_local = self.extract_record_field(scru_local, idx);
-                                    self.symbol_table.insert(field.name, field_local);
-                                }
+                        PatKind::Literal(lit) => match lit {
+                            ValueKind::Int(i) => {
+                                cases.push((*i, arm_block_id));
                             }
-                        }
+                            _ => todo!(),
+                        },
+                        // PatKind::Record(fields) => {
+                        //     for field in fields {
+                        //         let field_idx = self.get_record_field_index(&scru_ty, field.name);
+                        //         if let Some(idx) = field_idx {
+                        //             let field_local = self.extract_record_field(scru_local, idx);
+                        //             self.symbol_table.insert(field.name, field_local);
+                        //         }
+                        //     }
+                        // }
                         _ => {}
                     }
 
