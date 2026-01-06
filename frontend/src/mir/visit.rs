@@ -14,9 +14,7 @@ pub fn visit_block_succs<F: FnMut(BlockId)>(_func: &Function, block: &BasicBlock
             for (_, target) in jump_table.cases.iter() {
                 visit(*target);
             }
-            if let Some(default) = jump_table.default {
-                visit(default);
-            }
+            visit(jump_table.default);
         }
     }
 }

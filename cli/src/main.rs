@@ -11,7 +11,7 @@ struct Options {
     #[arg(short, long)]
     verbose: bool,
     #[arg(short, long)]
-    mir: bool
+    mir: bool,
 }
 
 fn main() {

@@ -154,7 +154,6 @@ impl<'ctx> Llvm<'ctx> {
         block_id: mir::BlockId,
     ) -> BasicBlock<'ctx> {
         if let Some(bb) = self.function_blocks.get(&block_id) {
-            println!("found existing bb {block_id}: {:?}", bb);
             return *bb;
         }
 
@@ -163,7 +162,6 @@ impl<'ctx> Llvm<'ctx> {
             .append_basic_block(*llvm_fn, format!("bb{}", block_id).as_str());
 
         self.function_blocks.insert(block_id, bb);
-        println!("created bb {block_id}: {:?}", bb);
         bb
     }
 
@@ -203,7 +201,6 @@ impl<'ctx> Llvm<'ctx> {
                     .build_load(index_local.ty, index_local.alloc, "index_load")?
                     .into_int_value();
                 let zero = self.ctx().i32_type().const_zero();
-                println!("index_val: {:?}", index_val);
 
                 let gep = unsafe {
                     self.builder.build_in_bounds_gep(
@@ -343,8 +340,32 @@ impl<'ctx> Llvm<'ctx> {
                         let variant_ty = match payload_ty {
                             mir::Ty::Unit => self.ctx().struct_type(&[tag_ty], false),
                             _ => {
-                                let payload_ty =
-                                    Self::basic_type_to_llvm_basic_type(self.ctx(), payload_ty);
+                                // Calculate payload size accounting for alignment.
+                                // The payload type determines both size and alignment requirements.
+                                // For proper union semantics, we use the payload's alignment
+                                // to determine padding, ensuring consistent layout with local variables.
+                                let payload_size = payload_ty.bytes();
+                                let payload_align = payload_ty.align();
+
+                                // Calculate total struct size: 1 byte tag + padding + payload
+                                // This must match what Ty::TaggedUnion::bytes() returns
+                                let base_size = 1 + payload_size;
+                                let padding = if payload_align > 1 {
+                                    (payload_align - (base_size % payload_align)) % payload_align
+                                } else {
+                                    0
+                                };
+                                let total_size = base_size + padding;
+
+                                // The array size should match what basic_type_to_llvm_basic_type
+                                // uses for TaggedUnion, which is ty.bytes() directly
+                                let array_size = total_size;
+
+                                let payload_ty = self
+                                    .ctx()
+                                    .i8_type()
+                                    .array_type(array_size as u32)
+                                    .as_basic_type_enum();
                                 self.ctx().struct_type(&[tag_ty, payload_ty], false)
                             }
                         };
@@ -355,7 +376,22 @@ impl<'ctx> Llvm<'ctx> {
                         let tag_val = self.ctx().i8_type().const_int(*tag as u64, false);
                         self.builder.build_store(variant_ptr, tag_val)?;
 
-                        variant_ptr.as_basic_value_enum()
+                        if operands.len() > 1 {
+                            todo!("payloads with more than one operand not implemented");
+                        } else if operands.len() == 1 {
+                            let payload_gep = self.builder.build_struct_gep(
+                                variant_ty,
+                                variant_ptr,
+                                1,
+                                "payload_gep",
+                            )?;
+
+                            let payload_val = self.compile_operand(&operands[0])?;
+                            self.builder.build_store(payload_gep, payload_val)?;
+                        }
+
+                        self.builder
+                            .build_load(variant_ty, variant_ptr, "variant_load")?
                     }
                     AllocKind::Tuple(tys) => {
                         let field_tys: Vec<BasicTypeEnum<'ctx>> = tys
@@ -363,7 +399,6 @@ impl<'ctx> Llvm<'ctx> {
                             .map(|t| Self::basic_type_to_llvm_basic_type(self.ctx(), t))
                             .collect();
 
-                        println!("field_tys: {:?}", field_tys);
                         let struct_ty = self.ctx().struct_type(&field_tys, false);
 
                         let struct_ptr = self.builder.build_alloca(struct_ty, "struct_alloca")?;
@@ -379,7 +414,6 @@ impl<'ctx> Llvm<'ctx> {
                                 .build_store(field_alloca, self.compile_operand(operand)?)?;
                         }
 
-                        println!("struct_ptr: {:?}", struct_ptr);
                         self.builder
                             .build_load(struct_ty, struct_ptr, "struct_load")?
                     }
@@ -460,10 +494,6 @@ impl<'ctx> Llvm<'ctx> {
                 let _ = self.builder.build_return(None);
             }
             mir::Terminator::BrIf(cond_local_id, then_block, else_block) => {
-                println!("cond_local_id: {cond_local_id}");
-                println!("then_block: {then_block}");
-                println!("else_block: {else_block}");
-
                 let cond_local = self.function_locals.get(&cond_local_id).unwrap();
                 let cond_val = self
                     .builder
@@ -483,7 +513,34 @@ impl<'ctx> Llvm<'ctx> {
                 let target_block = self.get_or_create_bb(llvm_fn, target_block);
                 self.builder.build_unconditional_branch(target_block)?;
             }
-            mir::Terminator::BrTable(local_id, jump_table) => todo!(),
+            mir::Terminator::BrTable(local_id, jump_table) => {
+                let jump_local_info = self.function_locals.get(&local_id).unwrap();
+
+                let jump_ptr = self.builder.build_struct_gep(
+                    jump_local_info.ty,
+                    jump_local_info.alloc,
+                    0,
+                    "jump_ptr",
+                )?;
+
+                let jump_val = self
+                    .builder
+                    .build_load(self.ctx().i8_type(), jump_ptr, "jump_val")
+                    .unwrap()
+                    .into_int_value();
+
+                let default_bb = self.get_or_create_bb(llvm_fn, jump_table.default);
+
+                let mut cases = Vec::new();
+                for (val, block_id) in jump_table.cases {
+                    let bb = self.get_or_create_bb(llvm_fn, block_id);
+
+                    let val = self.ctx().i8_type().const_int(val as u64, false);
+                    cases.push((val, bb));
+                }
+
+                self.builder.build_switch(jump_val, default_bb, &cases)?;
+            }
         }
 
         Ok(())
@@ -495,7 +552,6 @@ impl<'ctx> Llvm<'ctx> {
         llvm_fn: &FunctionValue<'ctx>,
         ctx: &FrontendCtx,
     ) -> Result<BasicBlock<'ctx>> {
-        println!("compiling block: {:?}", block);
         let bb = self.get_or_create_bb(llvm_fn, block.block_id);
 
         self.builder.position_at_end(bb);

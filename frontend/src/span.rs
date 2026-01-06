@@ -72,7 +72,10 @@ impl SourceMap {
                 line_starts.push(i + 1);
             }
         }
-        Self { source, line_starts }
+        Self {
+            source,
+            line_starts,
+        }
     }
 
     /// Get the source text.
@@ -82,7 +85,8 @@ impl SourceMap {
 
     /// Convert a byte offset to a (line, column) pair (1-indexed).
     pub fn offset_to_line_col(&self, offset: usize) -> (usize, usize) {
-        let line = self.line_starts
+        let line = self
+            .line_starts
             .iter()
             .rposition(|&start| start <= offset)
             .unwrap_or(0);
@@ -96,7 +100,8 @@ impl SourceMap {
             return None;
         }
         let start = self.line_starts[line - 1];
-        let end = self.line_starts
+        let end = self
+            .line_starts
             .get(line)
             .copied()
             .unwrap_or(self.source.len());
@@ -133,7 +138,7 @@ impl SourceMap {
 
         let (line, col) = self.offset_to_line_col(span.start);
         let line_text = self.get_line(line).unwrap_or("");
-        
+
         // Calculate underline length
         let (end_line, _) = self.offset_to_line_col(span.end.saturating_sub(1).max(span.start));
         let underline_len = if line == end_line {
@@ -145,19 +150,24 @@ impl SourceMap {
 
         let line_num_width = format!("{}", line).len();
         let padding = " ".repeat(line_num_width);
-        
+
         let mut output = String::new();
         output.push_str(&format!("error: {}\n", message));
         output.push_str(&format!("{}--> {}:{}\n", padding, line, col));
         output.push_str(&format!("{} |\n", padding));
         output.push_str(&format!("{} | {}\n", line, line_text));
-        output.push_str(&format!("{} | {}{}", padding, " ".repeat(col - 1), "^".repeat(underline_len)));
-        
+        output.push_str(&format!(
+            "{} | {}{}",
+            padding,
+            " ".repeat(col - 1),
+            "^".repeat(underline_len)
+        ));
+
         if let Some(label) = label {
             output.push_str(&format!(" {}", label));
         }
         output.push('\n');
-        
+
         output
     }
 }
@@ -167,15 +177,15 @@ impl SourceMap {
 pub trait Diagnostic {
     /// Get the span of the error.
     fn span(&self) -> &Span;
-    
+
     /// Get the main error message.
     fn message(&self) -> String;
-    
+
     /// Get an optional label for the underlined span.
     fn label(&self) -> Option<String> {
         None
     }
-    
+
     /// Format the error with source context.
     fn format(&self, source_map: &SourceMap) -> String {
         source_map.format_error(self.span(), &self.message(), self.label().as_deref())
@@ -213,9 +223,9 @@ mod tests {
         let source = "hello\nworld\nfoo".to_string();
         let sm = SourceMap::new(source);
 
-        assert_eq!(sm.offset_to_line_col(0), (1, 1));  // 'h'
-        assert_eq!(sm.offset_to_line_col(5), (1, 6));  // '\n'
-        assert_eq!(sm.offset_to_line_col(6), (2, 1));  // 'w'
+        assert_eq!(sm.offset_to_line_col(0), (1, 1)); // 'h'
+        assert_eq!(sm.offset_to_line_col(5), (1, 6)); // '\n'
+        assert_eq!(sm.offset_to_line_col(6), (2, 1)); // 'w'
         assert_eq!(sm.offset_to_line_col(11), (2, 6)); // '\n'
         assert_eq!(sm.offset_to_line_col(12), (3, 1)); // 'f'
     }

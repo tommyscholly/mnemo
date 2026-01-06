@@ -273,6 +273,15 @@ impl<'a> AstToMIR<'a> {
         }
     }
 
+    fn get_variant_index(&self, scrutinee_ty: &TypeKind, variant_name: Symbol) -> Option<usize> {
+        match scrutinee_ty {
+            TypeKind::Variant(variants) => {
+                variants.iter().position(|v| v.name.node == variant_name)
+            }
+            _ => None,
+        }
+    }
+
     fn bind_pattern(&mut self, pat: &Pat, scrutinee_local: mir::LocalId, _scrutinee_ty: &TypeKind) {
         match &pat.node {
             PatKind::Symbol(name) => {
@@ -288,10 +297,16 @@ impl<'a> AstToMIR<'a> {
         scrutinee_local: mir::LocalId,
         _variant_tag: u8,
         _binding_pat: &Pat,
-        _scrutinee_ty: &TypeKind,
+        scrutinee_ty: &TypeKind,
+        tag: usize,
     ) -> mir::LocalId {
         let payload_local = self.new_local(&TypeKind::Int);
-        let place = mir::Place::new(scrutinee_local, mir::PlaceKind::Field(0, mir::Ty::Int));
+        let field_ty = match scrutinee_ty {
+            TypeKind::Variant(variants) => variants[tag].adts.clone(),
+            _ => panic!("expected variant type, got {:?}", scrutinee_ty),
+        };
+        let field_mir_ty = ast_type_to_mir_type(&field_ty[0].node);
+        let place = mir::Place::new(scrutinee_local, mir::PlaceKind::Field(1, field_mir_ty));
         let rvalue = mir::RValue::Use(mir::Operand::Copy(place));
         self.get_current_block()
             .stmts
@@ -643,11 +658,13 @@ impl AstVisitor for AstToMIR<'_> {
                                 cases.push((tag as u32, arm_block_id));
 
                                 if !bindings.is_empty() {
+                                    let idx = self.get_variant_index(&scru_ty, *name).unwrap();
                                     let payload_local = self.extract_variant_payload(
                                         scru_local,
                                         tag,
                                         &bindings[0],
                                         &scru_ty,
+                                        idx,
                                     );
                                     self.bind_pattern(&bindings[0], payload_local, &scru_ty);
                                 }
@@ -692,7 +709,7 @@ impl AstVisitor for AstToMIR<'_> {
                 }
 
                 let jump_table = mir::JumpTable {
-                    default: default_arm_block_id.or(Some(join_block_id)),
+                    default: default_arm_block_id.unwrap_or(join_block_id),
                     cases,
                 };
 

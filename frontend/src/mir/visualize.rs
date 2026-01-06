@@ -61,9 +61,7 @@ impl MIRVisualizer for Terminator {
                 for (tag, target) in &jump_table.cases {
                     print!(" {} => {}", tag, target);
                 }
-                if let Some(default) = jump_table.default {
-                    print!(" default => {}", default);
-                }
+                print!(" default => {}", jump_table.default);
                 println!();
             }
         }

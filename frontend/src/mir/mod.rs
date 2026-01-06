@@ -1,8 +1,8 @@
+mod domtree;
 mod graph;
 pub mod ir;
 mod visit;
 pub mod visualize;
-mod domtree;
 
 pub use ir::*;
 

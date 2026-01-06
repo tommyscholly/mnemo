@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::{lex::BinOp, mir::graph::FlowGraph};
+use crate::lex::BinOp;
 
 // corresponds to locals in the defining function
 pub type LocalId = usize;
@@ -31,11 +31,44 @@ impl Ty {
             Ty::DynArray(ty) => ty.bytes(),
             Ty::Tuple(tys) => tys.iter().map(|t| t.bytes()).sum(),
             Ty::Ptr(_) => 4,
-            // this just returns the size of the largest field, not including the tag byte
             Ty::TaggedUnion(tags_tys) => {
-                tags_tys.iter().map(|(_tag, ty)| ty.bytes()).max().unwrap()
+                let max_payload_size = tags_tys.iter().map(|(_tag, ty)| ty.bytes()).max().unwrap();
+                let max_payload_align = tags_tys
+                    .iter()
+                    .map(|(_tag, ty)| ty.align())
+                    .max()
+                    .unwrap_or(1);
+                let base_size = 1 + max_payload_size;
+                let padding = if max_payload_align > 1 {
+                    (max_payload_align - (base_size % max_payload_align)) % max_payload_align
+                } else {
+                    0
+                };
+                base_size + padding
             }
             Ty::Record(tys) => tys.iter().map(|t| t.bytes()).sum(),
+        }
+    }
+
+    pub fn align(&self) -> usize {
+        match self {
+            Ty::Bool => 1,
+            Ty::Char => 1,
+            Ty::Int => 4,
+            Ty::Unit => 1,
+            Ty::Array(ty, _) => ty.align(),
+            Ty::DynArray(ty) => ty.align(),
+            Ty::Tuple(tys) => tys.iter().map(|t| t.align()).max().unwrap_or(1),
+            Ty::Ptr(_) => 4,
+            Ty::TaggedUnion(tags_tys) => {
+                let max_payload_align = tags_tys
+                    .iter()
+                    .map(|(_tag, ty)| ty.align())
+                    .max()
+                    .unwrap_or(1);
+                std::cmp::max(1, max_payload_align)
+            }
+            Ty::Record(tys) => tys.iter().map(|t| t.align()).max().unwrap_or(1),
         }
     }
 }
@@ -188,7 +221,7 @@ pub enum Statement {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct JumpTable {
-    pub default: Option<BlockId>,
+    pub default: BlockId,
     pub cases: Vec<(u32, BlockId)>,
 }
 
