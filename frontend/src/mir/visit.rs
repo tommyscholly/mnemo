@@ -2,7 +2,7 @@ use crate::mir::*;
 
 pub fn visit_block_succs<F: FnMut(BlockId)>(_func: &Function, block: &BasicBlock, mut visit: F) {
     match &block.terminator {
-        Terminator::Return => {}
+        Terminator::Return(_) => {}
         Terminator::Br(block_id) => {
             visit(*block_id);
         }

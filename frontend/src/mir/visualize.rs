@@ -48,7 +48,10 @@ impl MIRVisualizer for Terminator {
         let tabs = "\t".repeat(indent);
         print!("{tabs}");
         match self {
-            Terminator::Return => println!("return"),
+            Terminator::Return(local_opt) => println!(
+                "return {}",
+                local_opt.map_or("None".to_string(), |f| format!("{}", f))
+            ),
             Terminator::Br(block_id) => println!("br {}", block_id),
             Terminator::BrIf(cond_local_id, then_block_id, else_block_id) => {
                 println!(

@@ -289,7 +289,6 @@ fn parse_postfix(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
                 expr = Spanned::new(ExprKind::Index(Box::new(expr), Box::new(index)), span);
             }
             Some(Token::LParen) => {
-                // Handle calls on any expression (method calls, etc.)
                 tokens.pop_front();
                 let mut args = Vec::new();
 
@@ -308,11 +307,11 @@ fn parse_postfix(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
                 let end_span = expect_next(tokens, Token::RParen)?;
                 let span = expr.span.merge(&end_span);
 
-                // You'll need to decide how to represent this in your AST
                 expr = Spanned::new(
                     ExprKind::Call(Call {
-                        callee: Box::new(expr), // Requires changing Call struct
+                        callee: Box::new(expr),
                         args,
+                        returned_ty: None,
                     }),
                     span,
                 );
@@ -402,6 +401,7 @@ fn parse_identifier_expr(
                 ExprKind::Call(Call {
                     callee: Box::new(ident_expr),
                     args,
+                    returned_ty: None,
                 }),
                 span,
             ));

@@ -493,9 +493,19 @@ impl<'ctx> Llvm<'ctx> {
         _ctx: &FrontendCtx,
     ) -> Result<()> {
         match terminator {
-            mir::Terminator::Return => {
-                let _ = self.builder.build_return(None);
-            }
+            mir::Terminator::Return(local_id) => match local_id {
+                Some(local_id) => {
+                    let local = self.function_locals.get(&local_id).unwrap();
+                    let val = self
+                        .builder
+                        .build_load(local.ty, local.alloc, "return_val")
+                        .unwrap();
+                    self.builder.build_return(Some(&val))?;
+                }
+                None => {
+                    self.builder.build_return(None)?;
+                }
+            },
             mir::Terminator::BrIf(cond_local_id, then_block, else_block) => {
                 let cond_local = self.function_locals.get(&cond_local_id).unwrap();
                 let cond_val = self
@@ -587,9 +597,7 @@ impl<'ctx> Llvm<'ctx> {
         Ok(bb)
     }
 
-    fn compile_function(&mut self, function: mir::Function, ctx: &FrontendCtx) -> Result<()> {
-        self.function_locals.clear();
-
+    fn precompute_function(&mut self, function: &mir::Function) {
         let mut arg_types = Vec::new();
         let llvm_ctx = self.ctx();
 
@@ -600,11 +608,21 @@ impl<'ctx> Llvm<'ctx> {
         }
 
         let fn_type = Self::type_to_fn_type(llvm_ctx, &function.return_ty, arg_types);
-        let llvm_fn =
-            self.module
-                .add_function(function.name.as_str(), fn_type, Some(Linkage::External));
+        let _ = self
+            .module
+            .add_function(function.name.as_str(), fn_type, Some(Linkage::External));
+    }
 
-        let entry_block = self.ctx().append_basic_block(llvm_fn, "entry");
+    fn compile_function(&mut self, function: mir::Function, ctx: &FrontendCtx) -> Result<()> {
+        self.function_locals.clear();
+        self.function_blocks.clear();
+
+        let llvm_ctx = self.ctx();
+        let llvm_fn = self.module.get_function(&function.name).unwrap();
+
+        let entry_block = self
+            .ctx()
+            .append_basic_block(llvm_fn, format!("{}_entry", function.name).as_str());
         self.builder.position_at_end(entry_block);
 
         for local in function.locals.iter().skip(function.parameters) {
@@ -675,6 +693,10 @@ impl<'ctx> Compiler for Llvm<'ctx> {
     fn compile(mut self, module: mir::Module, ctx: FrontendCtx, debug: bool) -> Result<()> {
         for extern_ in module.externs {
             self.compile_extern(extern_)?;
+        }
+
+        for function in &module.functions {
+            self.precompute_function(function);
         }
 
         for function in module.functions {

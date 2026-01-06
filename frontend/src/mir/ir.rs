@@ -227,11 +227,11 @@ pub struct JumpTable {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Terminator {
-    Return,
+    Return(Option<LocalId>),
     Br(BlockId),
     // usize is index of the local for the condition
-    BrIf(usize, BlockId, BlockId),
-    BrTable(usize, JumpTable),
+    BrIf(LocalId, BlockId, BlockId),
+    BrTable(LocalId, JumpTable),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -247,7 +247,7 @@ impl BasicBlock {
         Self {
             block_id,
             stmts: Vec::new(),
-            terminator: Terminator::Return,
+            terminator: Terminator::Return(None),
         }
     }
 }

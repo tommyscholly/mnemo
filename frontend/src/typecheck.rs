@@ -122,12 +122,13 @@ impl ResolveType for Expr {
                 }
                 lhs_ty
             }
-            ExprKind::Call(Call { callee, args: _ }) => {
+            ExprKind::Call(Call {
+                callee,
+                args: _,
+                returned_ty,
+            }) => {
                 let (callee_sig, _) = resolve_callee_signature(callee, ctx).unwrap();
-                match callee_sig.node.return_ty.clone() {
-                    Some(ty) => ty,
-                    None => Type::synthetic(TypeKind::Unit),
-                }
+                returned_ty.clone().unwrap()
             }
             ExprKind::Allocation {
                 kind,
@@ -241,6 +242,37 @@ fn type_check_call(call: &mut Call, ctx: &mut TypecheckCtx) -> TypecheckResult<(
                 },
                 arg.span.clone(),
             ));
+        }
+    }
+
+    if let Some(returned_ty) = &call.returned_ty {
+        if callee_signature.node.return_ty.is_none() {
+            return Err(TypeError::new(
+                TypeErrorKind::ReturnTypeMismatch {
+                    expected: TypeKind::Unit,
+                    found: returned_ty.node.clone(),
+                },
+                call.callee.span.clone(),
+            ));
+        }
+
+        if callee_signature.node.return_ty != Some(returned_ty.clone()) {
+            return Err(TypeError::new(
+                TypeErrorKind::ReturnTypeMismatch {
+                    expected: callee_signature.node.return_ty.clone().unwrap().node,
+                    found: returned_ty.node.clone(),
+                },
+                call.callee.span.clone(),
+            ));
+        }
+    } else {
+        match callee_signature.node.return_ty {
+            Some(ty) => {
+                call.returned_ty = Some(ty);
+            }
+            None => {
+                call.returned_ty = Some(Type::synthetic(TypeKind::Unit));
+            }
         }
     }
 

@@ -93,6 +93,8 @@ pub enum Region {
 pub struct Call {
     pub callee: Box<Expr>,
     pub args: Vec<Expr>,
+    // filled in during typechecking
+    pub returned_ty: Option<Type>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

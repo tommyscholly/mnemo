@@ -92,6 +92,7 @@ pub struct AstToMIR<'a> {
     // store local types so we can resolve field accesses
     local_types: HashMap<mir::LocalId, TypeKind>,
     externs: Vec<mir::Extern>,
+    in_assign_expr: bool,
 }
 
 impl<'a> AstToMIR<'a> {
@@ -107,6 +108,7 @@ impl<'a> AstToMIR<'a> {
             variants: HashMap::new(),
             local_types: HashMap::new(),
             externs: Vec::new(),
+            in_assign_expr: false,
         }
     }
 
@@ -332,6 +334,7 @@ impl<'a> AstToMIR<'a> {
         payload_local
     }
 
+    #[allow(unused)]
     fn get_record_field_index(&self, scrutinee_ty: &TypeKind, field_name: Symbol) -> Option<usize> {
         match scrutinee_ty {
             TypeKind::Record(fields) => fields
@@ -343,6 +346,7 @@ impl<'a> AstToMIR<'a> {
         }
     }
 
+    #[allow(unused)]
     fn extract_record_field(
         &mut self,
         scrutinee_local: mir::LocalId,
@@ -433,8 +437,20 @@ impl AstVisitor for AstToMIR<'_> {
 
                 mir::RValue::BinOp(op, lhs_op, rhs_op)
             }
-            ExprKind::Call(Call { callee, args }) => {
-                let dest = self.get_current_function().locals.len() - 1;
+            ExprKind::Call(Call {
+                callee,
+                args,
+                returned_ty,
+            }) => {
+                assert!(returned_ty.is_some());
+                let returned_ty = returned_ty.unwrap();
+
+                let dest = if self.in_assign_expr {
+                    self.get_current_function().locals.len() - 1
+                } else {
+                    self.new_local(&returned_ty.node)
+                };
+
                 self.call(*callee, args, Some(dest));
 
                 let place = mir::Place::new(dest, mir::PlaceKind::Deref);
@@ -569,7 +585,9 @@ impl AstVisitor for AstToMIR<'_> {
 
                 self.symbol_table.insert(name.node, local_id);
 
+                self.in_assign_expr = true;
                 let rvalue = self.visit_expr(expr);
+                self.in_assign_expr = false;
                 let stmt = mir::Statement::Assign(local_id, rvalue);
                 let block = self.get_current_block();
                 block.stmts.push(stmt);
@@ -577,7 +595,9 @@ impl AstVisitor for AstToMIR<'_> {
             StmtKind::Assign { name, expr } => {
                 let name_sym = name.node;
                 let local_id = self.symbol_table[&name_sym];
+                self.in_assign_expr = true;
                 let rvalue = self.visit_expr(expr);
+                self.in_assign_expr = false;
                 let old_local = &self.get_current_function().locals[local_id];
                 let ty = old_local.ty.clone();
                 let new_local_id = self.new_local_with_ty(ty);
@@ -590,7 +610,11 @@ impl AstVisitor for AstToMIR<'_> {
                 let stmt = mir::Statement::Assign(new_local_id, rvalue);
                 self.get_current_block().stmts.push(stmt);
             }
-            StmtKind::Call(Call { callee, args }) => {
+            StmtKind::Call(Call {
+                callee,
+                args,
+                returned_ty: _,
+            }) => {
                 self.call(*callee, args, None);
             }
             StmtKind::IfElse(IfElse { cond, then, else_ }) => {
@@ -743,12 +767,18 @@ impl AstVisitor for AstToMIR<'_> {
                 self.current_block = join_block_id;
             }
             StmtKind::Return(expr) => {
-                if let Some(expr) = expr {
+                let local = if let Some(expr) = expr {
                     let expr = self.visit_expr(expr);
-                }
-                let ret = mir::Terminator::Return;
+
+                    // SAFETY: this was typed checked
+                    let return_ty = self.get_current_function().return_ty.clone();
+                    Some(self.rvalue_to_local(return_ty, expr))
+                } else {
+                    None
+                };
+
+                let ret = mir::Terminator::Return(local);
                 self.get_block(self.current_block).terminator = ret;
-                todo!()
             }
         }
     }
