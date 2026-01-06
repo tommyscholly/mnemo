@@ -60,18 +60,18 @@ impl TryFrom<&str> for Keyword {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
-            "int" => Ok(Keyword::Int),
-            "return" => Ok(Keyword::Return),
-            "extern" => Ok(Keyword::Extern),
-            "char" => Ok(Keyword::Char),
-            "if" => Ok(Keyword::If),
-            "else" => Ok(Keyword::Else),
-            "bool" => Ok(Keyword::Bool),
-            "true" => Ok(Keyword::True),
-            "false" => Ok(Keyword::False),
-            "match" => Ok(Keyword::Match),
-            "with" => Ok(Keyword::With),
             "allocates" => Ok(Keyword::Allocates),
+            "bool" => Ok(Keyword::Bool),
+            "char" => Ok(Keyword::Char),
+            "else" => Ok(Keyword::Else),
+            "extern" => Ok(Keyword::Extern),
+            "false" => Ok(Keyword::False),
+            "if" => Ok(Keyword::If),
+            "int" => Ok(Keyword::Int),
+            "match" => Ok(Keyword::Match),
+            "return" => Ok(Keyword::Return),
+            "true" => Ok(Keyword::True),
+            "with" => Ok(Keyword::With),
             _ => Err(()),
         }
     }

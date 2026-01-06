@@ -1,7 +1,4 @@
-printf :: extern (fmt_string: ^char, int_param: int)
-print_bool :: extern (bool_param: bool)
-print_int :: extern (int_param: int)
-make_fmt_str :: extern () : ^char
+printf :: extern (fmt_str: ^char, int_param: int)
 puts :: extern (s: ^char)
 
 allocation_function :: () : [2]{int} @ R
@@ -29,43 +26,46 @@ main :: () {
 
     print_int := inline_record.a + inline_record.b
 
-    fmt_string := make_fmt_str()
-    printf(fmt_string, print_int)
+    printf("%d\n", print_int)
 
     bool_val : bool = false
 
     if bool_val {
-        printf(fmt_string, array[0])
+        printf("%d\n", array[0])
     } else {
-        printf(fmt_string, array[1])
+        printf("%d\n", array[1])
     }
 
-    printf(fmt_string, tuple.0)
-    print_bool(tuple.1)
+    printf("%d\n", tuple.0)
+    if tuple.1 {
+        puts("true")
+    } else {
+        puts("false")
+    }
 
     match inline_some with
-        Some(x) => { printf(fmt_string, x) }
-      | None    => { printf(fmt_string, 0) }
+        Some(x) => { printf("%d\n", x) }
+      | None    => { printf("%d\n", 0) }
 
     match inline_none with
-        Some(x) => { printf(fmt_string, x) }
-      | None    => { printf(fmt_string, 0) }
+        Some(x) => { printf("%d\n", x) }
+      | None    => { printf("%d\n", 0) }
 
     match typed_int with
-        1 => { printf(fmt_string, 1) }
-      | 2 => { printf(fmt_string, 2) }
-      | _ => { printf(fmt_string, 999) }
+        1 => { printf("%d\n", 1) }
+      | 2 => { printf("%d\n", 2) }
+      | _ => { printf("%d\n", 999) }
 
     match 3 with
-        1 => { printf(fmt_string, 1) }
-      | 2 => { printf(fmt_string, 2) }
-      | _ => { printf(fmt_string, 999) }
+        1 => { printf("%d\n", 1) }
+      | 2 => { printf("%d\n", 2) }
+      | _ => { printf("%d\n", 999) }
 
     region_alloc := [2]{ 3, 4 } @ local
 
-    print_int(return_int())
+    printf("%d\n", return_int())
 
-    string := "hello world\n"
+    string := "hello world"
     puts(string)
 
 
