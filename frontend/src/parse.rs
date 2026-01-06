@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 
 use crate::ast::{
-    AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Match, MatchArm,
-    Module, Params, Pat, PatKind, RecordField, Region, Signature, SignatureInner, Stmt, StmtKind,
-    Type, TypeAliasDefinition, TypeKind, ValueKind, VariantField,
+    AllocKind, Block, BlockInner, Call, Constraint, Decl, DeclKind, Expr, ExprKind, IfElse, Match,
+    MatchArm, Module, Params, Pat, PatKind, RecordField, Region, Signature, SignatureInner, Stmt,
+    StmtKind, Type, TypeAliasDefinition, TypeKind, ValueKind, VariantField,
 };
 use crate::ctx::{Ctx, Symbol};
 use crate::lex::{BinOp, Keyword, Token};
@@ -626,6 +626,26 @@ fn parse_proc_sig(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRe
     Ok(Spanned::new(SignatureInner { params, return_ty }, span))
 }
 
+fn check_region_type_annotation(
+    ctx: &mut Ctx,
+    tokens: &mut VecDeque<SpannedToken>,
+) -> ParseResult<Option<Region>> {
+    let Some(Token::At) = peek_token(tokens) else {
+        return Ok(None);
+    };
+
+    let _ = tokens.pop_front().unwrap().span;
+    let region_ident = expect_identifier(tokens)?.node;
+
+    let region = if ctx.resolve(region_ident) == "local" {
+        Region::Local
+    } else {
+        Region::Generic(region_ident)
+    };
+
+    Ok(Some(region))
+}
+
 fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Option<Type>> {
     let ty = match peek_token(tokens) {
         Some(Token::Keyword(Keyword::Int)) => {
@@ -733,6 +753,43 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
             let span = start_span.merge(&end_span);
 
             Spanned::new(TypeKind::Record(record_fields), span)
+        }
+        Some(Token::LBracket) => {
+            let start_span = tokens.pop_front().unwrap().span;
+            let next_tok = tokens.pop_front().ok_or_else(ParseError::eof)?;
+
+            let alloc_kind = match next_tok.node {
+                Token::Int(i) => {
+                    expect_next(tokens, Token::RBracket)?;
+
+                    expect_next(tokens, Token::LBrace)?;
+                    let arr_ty = match parse_type(ctx, tokens)? {
+                        Some(ty) => ty.node,
+                        None => {
+                            return Err(ParseError::new(
+                                ParseErrorKind::ExpectedType,
+                                peek_span(tokens).unwrap_or(start_span),
+                            ));
+                        }
+                    };
+                    AllocKind::Array(arr_ty.into(), i as usize)
+                }
+                _ => {
+                    return Err(ParseError::new(
+                        ParseErrorKind::ExpectedExpression,
+                        next_tok.span,
+                    ));
+                }
+            };
+
+            let end_span = expect_next(tokens, Token::RBrace)?;
+            let span = start_span.merge(&end_span);
+
+            let region = check_region_type_annotation(ctx, tokens)?;
+            Spanned::new(
+                TypeKind::Alloc(alloc_kind, region.unwrap_or(Region::Stack)),
+                span,
+            )
         }
         _ => {
             return Ok(None);
@@ -953,7 +1010,17 @@ fn parse_stmt(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
     match peek_token(tokens) {
         Some(Token::Keyword(Keyword::If)) => parse_ifelse(ctx, tokens),
         Some(Token::Keyword(Keyword::Match)) => parse_match(ctx, tokens),
-        // Some(Token::Keyword(Keyword::Return))
+        Some(Token::Keyword(Keyword::Return)) => {
+            let ret_span = expect_next(tokens, Token::Keyword(Keyword::Return))?;
+            // TODO: is this the right way to scan for empty return statements?
+            if let Some(Token::RBrace) = peek_token(tokens) {
+                return Ok(Spanned::new(StmtKind::Return(None), ret_span));
+            }
+
+            let expr = parse_expr(ctx, tokens)?;
+            let span = ret_span.merge(&expr.span);
+            Ok(Spanned::new(StmtKind::Return(Some(expr)), span))
+        }
         _ => {
             let name = expect_identifier(tokens)?;
             let start_span = name.span.clone();
@@ -1004,9 +1071,42 @@ fn parse_block(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResul
     let end_span = expect_next(tokens, Token::RBrace)?;
     let span = start_span.merge(&end_span);
 
-    Ok(Spanned::new(BlockInner { stmts, expr: None }, span))
+    let mut expr = None;
+    if !stmts.is_empty() {
+        let last_stmt = &stmts[stmts.len() - 1];
+        if let StmtKind::Return(expr_) = &last_stmt.node {
+            expr = expr_.clone();
+        }
+    }
+
+    Ok(Spanned::new(BlockInner { stmts, expr }, span))
 }
 
+fn parse_constraints(
+    ctx: &mut Ctx,
+    tokens: &mut VecDeque<SpannedToken>,
+) -> ParseResult<Vec<Constraint>> {
+    let mut constraints = Vec::new();
+
+    if let Some(Token::Keyword(Keyword::With)) = peek_token(tokens) {
+        let _ = tokens.pop_front().unwrap();
+
+        while !tokens.is_empty() {
+            match peek_token(tokens) {
+                Some(Token::Keyword(Keyword::Allocates)) => {
+                    let t = tokens.pop_front().unwrap();
+                    let Some(region) = check_region_type_annotation(ctx, tokens)? else {
+                        return Err(ParseError::new(ParseErrorKind::ExpectedRegion, t.span));
+                    };
+                    constraints.push(Constraint::Allocates(region));
+                }
+                _ => break,
+            }
+        }
+    }
+
+    Ok(constraints)
+}
 fn parse_procedure(
     ctx: &mut Ctx,
     name: Spanned<Symbol>,
@@ -1014,6 +1114,7 @@ fn parse_procedure(
     tokens: &mut VecDeque<SpannedToken>,
 ) -> ParseResult<Decl> {
     let sig = parse_proc_sig(ctx, tokens)?;
+    let constraints = parse_constraints(ctx, tokens)?;
     let block = parse_block(ctx, tokens)?;
     let span = name.span.merge(&block.span);
 
@@ -1022,6 +1123,7 @@ fn parse_procedure(
             name,
             fn_ty,
             sig,
+            constraints,
             block,
         },
         span,
@@ -1986,5 +2088,41 @@ mod tests {
         // types not resolved yet
         assert_eq!(*kind, AllocKind::Tuple(vec![]));
         assert_eq!(*region, Some(Region::Generic(Symbol(4))));
+    }
+
+    #[test]
+    fn test_return_stmt() {
+        let decs = expect_parse_ok("foo :: (): int { return 1 }", 1);
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            panic!("expected procedure");
+        };
+
+        let StmtKind::Return(expr) = &block.node.stmts[0].node else {
+            panic!("expected return stmt");
+        };
+
+        assert!(expr.is_some());
+        assert_eq!(
+            expr.as_ref().unwrap().node,
+            ExprKind::Value(ValueKind::Int(1))
+        );
+    }
+
+    #[test]
+    fn test_empty_return_stmt() {
+        let decs = expect_parse_ok("foo :: (): int { return }", 1);
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            panic!("expected procedure");
+        };
+
+        let StmtKind::Return(expr) = &block.node.stmts[0].node else {
+            panic!("expected return stmt");
+        };
+
+        assert!(expr.is_none());
     }
 }

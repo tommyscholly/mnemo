@@ -742,6 +742,14 @@ impl AstVisitor for AstToMIR<'_> {
 
                 self.current_block = join_block_id;
             }
+            StmtKind::Return(expr) => {
+                if let Some(expr) = expr {
+                    let expr = self.visit_expr(expr);
+                }
+                let ret = mir::Terminator::Return;
+                self.get_block(self.current_block).terminator = ret;
+                todo!()
+            }
         }
     }
 
@@ -792,6 +800,7 @@ impl AstVisitor for AstToMIR<'_> {
                 fn_ty,
                 sig,
                 block,
+                constraints: _,
             } => {
                 let name_sym = name.node;
                 // TODO: we do not use function types yet
@@ -832,6 +841,7 @@ impl AstVisitor for AstToMIR<'_> {
 
                 self.visit_block(block);
                 self.current_function = None;
+                self.current_block = 0;
             }
         }
     }

@@ -84,6 +84,7 @@ pub enum AllocKind {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Region {
     // need to track where a region originates from
+    Stack,
     Local,
     Generic(Symbol),
 }
@@ -176,6 +177,7 @@ pub enum StmtKind {
     Call(Call),
     IfElse(IfElse),
     Match(Match),
+    Return(Option<Expr>),
 }
 
 pub type Stmt = Spanned<StmtKind>;
@@ -198,6 +200,11 @@ pub struct SignatureInner {
 
 pub type Signature = Spanned<SignatureInner>;
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Constraint {
+    Allocates(Region),
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DeclKind {
     // name :: int
@@ -219,6 +226,7 @@ pub enum DeclKind {
         // TODO: implement fn_tys
         fn_ty: Option<Type>,
         sig: Signature,
+        constraints: Vec<Constraint>,
         block: Block,
     },
 }

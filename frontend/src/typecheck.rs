@@ -66,6 +66,10 @@ pub enum TypeErrorKind {
         expected: TypeKind,
         found: TypeKind,
     },
+    ReturnTypeMismatch {
+        expected: TypeKind,
+        found: TypeKind,
+    },
     UnknownSymbol(Symbol),
     UnknownField(Symbol),
     ArgCountMismatch {
@@ -132,7 +136,7 @@ impl ResolveType for Expr {
             } => {
                 // TODO: implement region handling
                 // regions should be resolved by the time we get here
-                let region_handle = region.unwrap_or(Region::Local);
+                let region_handle = region.unwrap_or(Region::Stack);
                 let kind = match kind {
                     AllocKind::Tuple(tys) => {
                         let mut types = Vec::new();
@@ -647,6 +651,11 @@ impl Typecheck for Stmt {
                     arm.body.typecheck(ctx)?;
                 }
             }
+            StmtKind::Return(expr) => {
+                if let Some(expr) = expr {
+                    expr.typecheck(ctx)?;
+                }
+            }
         }
 
         Ok(())
@@ -657,6 +666,10 @@ impl Typecheck for Block {
     fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
         for stmt in self.node.stmts.iter_mut() {
             stmt.typecheck(ctx)?;
+        }
+
+        if let Some(expr) = &mut self.node.expr {
+            expr.typecheck(ctx)?;
         }
 
         Ok(())
@@ -693,6 +706,7 @@ impl Typecheck for Decl {
                 fn_ty,
                 sig,
                 block,
+                constraints: _,
             } => {
                 if let Some(declared_fn_ty) = fn_ty {
                     let TypeKind::Fn(fn_sig) = &declared_fn_ty.node else {
@@ -730,6 +744,22 @@ impl Typecheck for Decl {
 
                 ctx.function_sigs.insert(name.node, sig.clone());
                 block.typecheck(ctx)?;
+
+                if let Some(expr) = &block.node.expr
+                    && let Some(ret_ty) = &sig.node.return_ty
+                {
+                    let expr_ty = expr.resolve_type(ctx);
+
+                    if expr_ty.node != ret_ty.node {
+                        return Err(TypeError::new(
+                            TypeErrorKind::ReturnTypeMismatch {
+                                expected: ret_ty.node.clone(),
+                                found: expr_ty.node,
+                            },
+                            expr.span.clone(),
+                        ));
+                    }
+                }
             }
         }
 

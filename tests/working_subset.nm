@@ -3,6 +3,15 @@ print_bool :: extern (bool_param: bool)
 print_int :: extern (int_param: int)
 make_fmt_str :: extern () : ^char
 
+allocation_function :: () : [2]{int} @ R
+// allocates introduces a new region `R` that the function may allocate in
+  with allocates @ R
+{
+    alloc := [2]{ 1, 2 } @ R
+
+    return alloc
+}
+
 main :: () {
     untyped_int := 1
     typed_int : int = 2

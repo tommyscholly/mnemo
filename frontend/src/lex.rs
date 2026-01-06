@@ -52,6 +52,7 @@ pub enum Keyword {
     False,
     Match,
     With,
+    Allocates,
 }
 
 impl TryFrom<&str> for Keyword {
@@ -70,6 +71,7 @@ impl TryFrom<&str> for Keyword {
             "false" => Ok(Keyword::False),
             "match" => Ok(Keyword::Match),
             "with" => Ok(Keyword::With),
+            "allocates" => Ok(Keyword::Allocates),
             _ => Err(()),
         }
     }
