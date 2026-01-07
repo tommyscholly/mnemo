@@ -9,6 +9,10 @@ allocation_function :: () : [2]{int} @ R
     return alloc
 }
 
+identity :: (comptime T: type, x: T) : T {
+    return x
+}
+
 return_int :: () : int {
     return 69420
 }
@@ -67,6 +71,7 @@ main :: () {
     string := "hello world\n"
     printf(string)
 
+    val := identity(int, 1)
 
     // dyn_array := [] { 1, 2 }
 }

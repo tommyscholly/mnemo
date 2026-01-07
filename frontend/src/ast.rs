@@ -10,6 +10,7 @@ pub enum ValueKind {
     Bool(bool),
     Ident(Symbol),
     Int(i32),
+    Type(TypeKind),
 }
 
 #[allow(unused)]

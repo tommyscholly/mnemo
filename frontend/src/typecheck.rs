@@ -6,8 +6,9 @@ use crate::{
     Ctx,
     ast::{
         self, AllocKind, Block, BlockInner, Call, ComptimeValue, Decl, DeclKind, Expr, ExprKind,
-        IfElse, Match, Module, Param, Params, Pat, PatKind, RecordField, Region, Signature,
-        SignatureInner, Stmt, StmtKind, Type, TypeKind, TypedValue, ValueKind, VariantField,
+        IfElse, Match, MatchArm, Module, Param, Params, Pat, PatKind, RecordField, Region,
+        Signature, SignatureInner, Stmt, StmtKind, Type, TypeKind, TypedValue, ValueKind,
+        VariantField,
     },
     ctx::Symbol,
     lex::BinOp,
@@ -96,6 +97,8 @@ pub struct Analyzer<'a> {
     pub function_sigs: HashMap<Symbol, Signature>,
     pub comptime_env: HashMap<Symbol, ComptimeValue>,
     pub monomorph_cache: HashMap<ast::MonomorphKey, DeclKind>,
+    pub module_decls: HashMap<Symbol, DeclKind>,
+    pub pending_monomorphs: Vec<Decl>,
 }
 
 impl<'a> Analyzer<'a> {
@@ -106,6 +109,8 @@ impl<'a> Analyzer<'a> {
             function_sigs: HashMap::new(),
             comptime_env: HashMap::new(),
             monomorph_cache: HashMap::new(),
+            module_decls: HashMap::new(),
+            pending_monomorphs: Vec::new(),
         }
     }
 
@@ -189,6 +194,181 @@ impl<'a> Analyzer<'a> {
     }
 
     #[allow(clippy::only_used_in_recursion)]
+    fn substitute_type(&self, ty: &TypeKind, subs: &HashMap<Symbol, TypeKind>) -> TypeKind {
+        match ty {
+            TypeKind::Generic(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
+            TypeKind::Ptr(inner) => TypeKind::Ptr(Box::new(self.substitute_type(inner, subs))),
+            TypeKind::Alloc(kind, region) => TypeKind::Alloc(kind.clone(), *region),
+            TypeKind::Fn(sig) => {
+                let new_params: Vec<_> = sig
+                    .params
+                    .params
+                    .iter()
+                    .map(|p| Param {
+                        pattern: p.pattern.clone(),
+                        ty: Type::synthetic(self.substitute_type(&p.ty.node, subs)),
+                        is_comptime: p.is_comptime,
+                    })
+                    .collect();
+                TypeKind::Fn(Box::new(SignatureInner {
+                    params: Params { params: new_params },
+                    return_ty: sig
+                        .return_ty
+                        .as_ref()
+                        .map(|t| Type::synthetic(self.substitute_type(&t.node, subs))),
+                }))
+            }
+            TypeKind::Resolved(inner) => self.substitute_type(inner, subs),
+            _ => ty.clone(),
+        }
+    }
+
+    #[allow(clippy::only_used_in_recursion)]
+    fn substitute_expr(&self, expr: &Expr, subs: &HashMap<Symbol, TypeKind>) -> Expr {
+        match &expr.node {
+            ExprKind::Value(vk) => Spanned::new(ExprKind::Value(vk.clone()), expr.span.clone()),
+            ExprKind::Call(call) => Spanned::new(
+                ExprKind::Call(Call {
+                    callee: Box::new(self.substitute_expr(&call.callee, subs)),
+                    args: call
+                        .args
+                        .iter()
+                        .map(|a| self.substitute_expr(a, subs))
+                        .collect(),
+                    returned_ty: call.returned_ty.clone(),
+                }),
+                expr.span.clone(),
+            ),
+            ExprKind::BinOp { op, lhs, rhs } => Spanned::new(
+                ExprKind::BinOp {
+                    op: *op,
+                    lhs: Box::new(self.substitute_expr(lhs, subs)),
+                    rhs: Box::new(self.substitute_expr(rhs, subs)),
+                },
+                expr.span.clone(),
+            ),
+            ExprKind::FieldAccess(inner, field) => Spanned::new(
+                ExprKind::FieldAccess(Box::new(self.substitute_expr(inner, subs)), *field),
+                expr.span.clone(),
+            ),
+            ExprKind::TupleAccess(inner, idx) => Spanned::new(
+                ExprKind::TupleAccess(Box::new(self.substitute_expr(inner, subs)), *idx),
+                expr.span.clone(),
+            ),
+            ExprKind::Index(inner, idx) => Spanned::new(
+                ExprKind::Index(
+                    Box::new(self.substitute_expr(inner, subs)),
+                    Box::new(self.substitute_expr(idx, subs)),
+                ),
+                expr.span.clone(),
+            ),
+            ExprKind::Allocation {
+                kind,
+                elements,
+                region,
+            } => Spanned::new(
+                ExprKind::Allocation {
+                    kind: kind.clone(),
+                    elements: elements
+                        .iter()
+                        .map(|e| self.substitute_expr(e, subs))
+                        .collect(),
+                    region: *region,
+                },
+                expr.span.clone(),
+            ),
+        }
+    }
+
+    fn substitute_stmt(&self, stmt: &Stmt, subs: &HashMap<Symbol, TypeKind>) -> Stmt {
+        match &stmt.node {
+            StmtKind::ValDec {
+                name,
+                ty,
+                expr,
+                is_comptime,
+            } => Spanned::new(
+                StmtKind::ValDec {
+                    name: name.clone(),
+                    ty: ty
+                        .as_ref()
+                        .map(|t| Type::synthetic(self.substitute_type(&t.node, subs))),
+                    expr: self.substitute_expr(expr, subs),
+                    is_comptime: *is_comptime,
+                },
+                stmt.span.clone(),
+            ),
+            StmtKind::Assign { name, expr } => Spanned::new(
+                StmtKind::Assign {
+                    name: name.clone(),
+                    expr: self.substitute_expr(expr, subs),
+                },
+                stmt.span.clone(),
+            ),
+            StmtKind::Call(call) => Spanned::new(
+                StmtKind::Call(Call {
+                    callee: Box::new(self.substitute_expr(&call.callee, subs)),
+                    args: call
+                        .args
+                        .iter()
+                        .map(|a| self.substitute_expr(a, subs))
+                        .collect(),
+                    returned_ty: call.returned_ty.clone(),
+                }),
+                stmt.span.clone(),
+            ),
+            StmtKind::IfElse(if_else) => Spanned::new(
+                StmtKind::IfElse(Box::new(IfElse {
+                    cond: self.substitute_expr(&if_else.cond, subs),
+                    then: self.substitute_block(&if_else.then, subs),
+                    else_: if_else
+                        .else_
+                        .as_ref()
+                        .map(|b| self.substitute_block(b, subs)),
+                })),
+                stmt.span.clone(),
+            ),
+            StmtKind::Return(expr) => Spanned::new(
+                StmtKind::Return(expr.as_ref().map(|e| self.substitute_expr(e, subs))),
+                stmt.span.clone(),
+            ),
+            StmtKind::Match(m) => Spanned::new(
+                StmtKind::Match(Match {
+                    scrutinee: self.substitute_expr(&m.scrutinee, subs),
+                    arms: m
+                        .arms
+                        .iter()
+                        .map(|arm| MatchArm {
+                            pat: arm.pat.clone(),
+                            body: self.substitute_block(&arm.body, subs),
+                        })
+                        .collect(),
+                }),
+                stmt.span.clone(),
+            ),
+        }
+    }
+
+    fn substitute_block(&self, block: &Block, subs: &HashMap<Symbol, TypeKind>) -> Block {
+        Spanned::new(
+            BlockInner {
+                stmts: block
+                    .node
+                    .stmts
+                    .iter()
+                    .map(|s| self.substitute_stmt(s, subs))
+                    .collect(),
+                expr: block
+                    .node
+                    .expr
+                    .as_ref()
+                    .map(|e| self.substitute_expr(e, subs)),
+            },
+            block.span.clone(),
+        )
+    }
+
+    #[allow(clippy::only_used_in_recursion)]
     fn resolve_generic_type(&self, ty: &TypeKind, subs: &HashMap<Symbol, TypeKind>) -> TypeKind {
         match ty {
             TypeKind::Generic(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
@@ -222,14 +402,14 @@ impl<'a> Analyzer<'a> {
         &mut self,
         base_fn: Symbol,
         comptime_args: Vec<ComptimeValue>,
-    ) -> Result<DeclKind, TypeError> {
+    ) -> Result<Decl, TypeError> {
         let key = ast::MonomorphKey {
             base_fn,
             comptime_args: comptime_args.clone(),
         };
 
-        if let Some(cached) = self.monomorph_cache.get(&key) {
-            return Ok(cached.clone());
+        if let Some(cached) = self.monomorph_cache.get(&key).cloned() {
+            return Ok(Spanned::new(cached, DUMMY_SPAN));
         }
 
         let Some(sig) = self.function_sigs.get(&base_fn).cloned() else {
@@ -288,19 +468,38 @@ impl<'a> Analyzer<'a> {
             parts.join("_")
         });
 
-        let monomorphized = DeclKind::Procedure {
+        let Some(original_decl) = self.module_decls.get(&base_fn) else {
+            return Err(TypeError::new(
+                TypeErrorKind::UnknownSymbol(base_fn),
+                DUMMY_SPAN,
+            ));
+        };
+
+        let DeclKind::Procedure { block, .. } = original_decl else {
+            return Err(TypeError::new(
+                TypeErrorKind::GenericInstantiation("not a procedure".to_string()),
+                DUMMY_SPAN,
+            ));
+        };
+
+        let monomorphized_block = self.substitute_block(block, &subs);
+
+        let monomorphized_decl = DeclKind::Procedure {
             name: Spanned::new(self.front_ctx.intern(&new_name), DUMMY_SPAN),
             fn_ty: Some(Type::synthetic(TypeKind::Fn(Box::new(
                 monomorphized_sig.clone(),
             )))),
             sig: Spanned::new(monomorphized_sig, DUMMY_SPAN),
             constraints: vec![],
-            block: todo!(), // Would need to copy and substitute body
+            block: monomorphized_block,
             monomorph_of: Some(key.clone()),
         };
 
-        self.monomorph_cache.insert(key, monomorphized.clone());
-        Ok(monomorphized)
+        self.monomorph_cache
+            .insert(key.clone(), monomorphized_decl.clone());
+        let decl = Spanned::new(monomorphized_decl, DUMMY_SPAN);
+        self.pending_monomorphs.push(decl.clone());
+        Ok(decl)
     }
 
     pub fn analyze_expr(&mut self, expr: &Expr) -> Result<TypedValue, TypeError> {
@@ -328,6 +527,10 @@ impl<'a> Analyzer<'a> {
                 ValueKind::Bool(b) => Ok(TypedValue::comptime(
                     TypeKind::Bool,
                     ComptimeValue::Bool(*b),
+                )),
+                ValueKind::Type(tk) => Ok(TypedValue::comptime(
+                    TypeKind::Type,
+                    ComptimeValue::Type(tk.clone()),
                 )),
             },
             ExprKind::BinOp { op, lhs, rhs } => {
@@ -508,9 +711,11 @@ impl<'a> Analyzer<'a> {
     }
 
     fn analyze_call(&mut self, call: &Call) -> Result<TypedValue, TypeError> {
-        for arg in &call.args {
-            self.analyze_expr(arg)?;
-        }
+        let arg_vals: Vec<_> = call
+            .args
+            .iter()
+            .map(|arg| self.analyze_expr(arg))
+            .collect::<Result<_, _>>()?;
 
         let (callee_sig, span) = self.resolve_callee_signature(&call.callee)?;
 
@@ -548,51 +753,98 @@ impl<'a> Analyzer<'a> {
             ));
         }
 
-        for (i, (arg, param)) in call.args.iter().zip(params.iter()).enumerate() {
-            let arg_val = self.analyze_expr(arg)?;
-            // For variadic params, skip type checking (printf linkage handles it)
-            if param.ty.node != TypeKind::Variadic {
-                self.structural_typecheck(&arg_val.ty, &param.ty.node, arg.span.clone())?;
+        let mut comptime_args = Vec::new();
+        for (arg_val, param) in arg_vals.iter().zip(params.iter()) {
+            if param.is_comptime {
+                if let Some(cv) = &arg_val.comptime_value {
+                    comptime_args.push(cv.clone());
+                } else {
+                    return Err(TypeError::new(
+                        TypeErrorKind::ComptimeArgRequired,
+                        call.callee.span.clone(),
+                    ));
+                }
             }
         }
 
-        if let Some(returned_ty) = &call.returned_ty {
-            if callee_sig.node.return_ty.is_none() {
-                return Err(TypeError::new(
-                    TypeErrorKind::ReturnTypeMismatch {
-                        expected: TypeKind::Unit,
-                        found: returned_ty.node.clone(),
-                    },
-                    call.callee.span.clone(),
-                ));
+        let mut subs = HashMap::new();
+        for (param, cv) in params.iter().zip(comptime_args.iter()) {
+            if let PatKind::Symbol(sym) = param.pattern.node {
+                let ty = match cv {
+                    ComptimeValue::Int(_) => TypeKind::Int,
+                    ComptimeValue::Bool(_) => TypeKind::Bool,
+                    ComptimeValue::Type(_) => TypeKind::Type,
+                    ComptimeValue::Array(_) => {
+                        TypeKind::Alloc(AllocKind::DynArray(Box::new(TypeKind::Int)), Region::Stack)
+                    }
+                    ComptimeValue::Unit => TypeKind::Unit,
+                };
+                subs.insert(sym, ty);
             }
-            if callee_sig.node.return_ty != Some(returned_ty.clone()) {
-                return Err(TypeError::new(
-                    TypeErrorKind::ReturnTypeMismatch {
-                        expected: callee_sig.node.return_ty.clone().unwrap().node,
-                        found: returned_ty.node.clone(),
-                    },
-                    call.callee.span.clone(),
-                ));
-            }
-        } else {
-            let return_ty = callee_sig
-                .node
-                .return_ty
-                .as_ref()
-                .map(|t| t.node.clone())
-                .unwrap_or(TypeKind::Unit);
-            let returned_ty = Type::synthetic(return_ty.clone());
-            // Note: we'd need &mut Call to set this, skipping for now
         }
 
-        let return_ty = callee_sig
+        let mut return_ty = callee_sig
             .node
             .return_ty
             .as_ref()
             .map(|t| t.node.clone())
             .unwrap_or(TypeKind::Unit);
+
+        if !comptime_args.is_empty()
+            && let ExprKind::Value(ValueKind::Ident(fn_name)) = &call.callee.node
+        {
+            let monomorphized_decl = self.monomorphize(*fn_name, comptime_args)?;
+            if let DeclKind::Procedure { sig, .. } = monomorphized_decl.node {
+                return_ty = sig
+                    .node
+                    .return_ty
+                    .as_ref()
+                    .map(|t| t.node.clone())
+                    .unwrap_or(TypeKind::Unit);
+            }
+        }
+
+        for (i, (arg, param)) in call.args.iter().zip(params.iter()).enumerate() {
+            let arg_val = &arg_vals[i];
+            if param.ty.node != TypeKind::Variadic {
+                let resolved_param_ty = self.resolve_type_with_subs(&param.ty.node, &subs);
+                self.structural_typecheck(&arg_val.ty, &resolved_param_ty, arg.span.clone())?;
+            }
+        }
+
         Ok(TypedValue::runtime(return_ty))
+    }
+
+    #[allow(clippy::only_used_in_recursion)]
+    fn resolve_type_with_subs(&self, ty: &TypeKind, subs: &HashMap<Symbol, TypeKind>) -> TypeKind {
+        match ty {
+            TypeKind::Generic(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
+            TypeKind::Ptr(inner) => {
+                TypeKind::Ptr(Box::new(self.resolve_type_with_subs(inner, subs)))
+            }
+            TypeKind::Alloc(kind, region) => TypeKind::Alloc(kind.clone(), *region),
+            TypeKind::Fn(sig) => {
+                let new_params: Vec<_> = sig
+                    .params
+                    .params
+                    .iter()
+                    .map(|p| Param {
+                        pattern: p.pattern.clone(),
+                        ty: Type::synthetic(self.resolve_type_with_subs(&p.ty.node, subs)),
+                        is_comptime: p.is_comptime,
+                    })
+                    .collect();
+                TypeKind::Fn(Box::new(SignatureInner {
+                    params: Params { params: new_params },
+                    return_ty: sig
+                        .return_ty
+                        .as_ref()
+                        .map(|t| Type::synthetic(self.resolve_type_with_subs(&t.node, subs))),
+                }))
+            }
+            TypeKind::Resolved(inner) => self.resolve_type_with_subs(inner, subs),
+            _ => ty.clone(),
+        }
     }
 
     fn resolve_callee_signature(&self, callee: &Expr) -> Result<(Signature, Span), TypeError> {
@@ -707,9 +959,15 @@ impl<'a> Analyzer<'a> {
     }
 
     pub fn typecheck_module(&mut self, module: &mut Module) -> Result<(), TypeError> {
+        for decl in &module.declarations {
+            if let DeclKind::Procedure { name, .. } = &decl.node {
+                self.module_decls.insert(name.node, decl.node.clone());
+            }
+        }
         for decl in &mut module.declarations {
             self.analyze_decl(decl)?;
         }
+        module.declarations.extend(self.pending_monomorphs.clone());
         self.check_entry_point()
     }
 
@@ -982,9 +1240,10 @@ impl<'a> Analyzer<'a> {
     }
 }
 
-pub fn typecheck(ctx: &mut Ctx, module: &mut Module) -> TypecheckResult<()> {
+pub fn typecheck(ctx: &mut Ctx, module: &mut Module) -> TypecheckResult<Module> {
     let mut analyzer = Analyzer::new(ctx);
-    analyzer.typecheck_module(module)
+    analyzer.typecheck_module(module)?;
+    Ok(module.clone())
 }
 
 #[cfg(test)]
@@ -1010,24 +1269,24 @@ mod tests {
         parse::parse(ctx, tokens).unwrap()
     }
 
-    fn typecheck_src(src: &str) -> TypecheckResult<Module> {
+    fn typecheck_src(src: &str) -> (Ctx, TypecheckResult<Module>) {
         let (mut ctx, tokens) = tokenify(src);
         let mut module = parseify(&mut ctx, tokens);
-        typecheck(&mut ctx, &mut module)?;
-        Ok(module)
+        let result = typecheck(&mut ctx, &mut module);
+        (ctx, result)
     }
 
     #[test]
     fn test_typecheck_simple_procedure() {
         let src = "foo :: (x: int): int { y : int = x }";
-        let result = typecheck_src(src);
+        let (_, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_typecheck_infers_val_type() {
         let src = "foo :: (x: int): int { y := x }";
-        let result = typecheck_src(src);
+        let (_, result) = typecheck_src(src);
         assert!(result.is_ok());
 
         let module = result.unwrap();
@@ -1045,28 +1304,28 @@ mod tests {
     #[test]
     fn test_typecheck_binop_expression() {
         let src = "foo :: (x: int, y: int): int { z : int = x + y }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_typecheck_assignment() {
         let src = "foo :: (x: int): int { y : int = x \n y = x + 1 }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_typecheck_if_else() {
         let src = "foo :: (x: int): int { if x { y : int = 1 } else { z : int = 2 } }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_typecheck_constant() {
         let src = "MY_CONST :: 42";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
 
         let module = result.unwrap();
@@ -1080,21 +1339,21 @@ mod tests {
     #[test]
     fn test_typecheck_function_call() {
         let src = "bar :: (x: int): int { y : int = 1 } \n foo :: (a: int): int { bar(1) }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_typecheck_function_call_with_return() {
         let src = "bar :: (x: int): int { y : int = 1 } \n foo :: (a: int): int { result : int = bar(1) }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_typecheck_error_unknown_symbol_in_ident() {
         let src = "foo :: (): int { y : int = unknown }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err.kind, TypeErrorKind::UnknownSymbol(_)));
@@ -1103,7 +1362,7 @@ mod tests {
     #[test]
     fn test_typecheck_error_unknown_symbol_in_assignment() {
         let src = "foo :: (): int { y : int = 1 \n y = unknown }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err.kind, TypeErrorKind::UnknownSymbol(_)));
@@ -1112,7 +1371,7 @@ mod tests {
     #[test]
     fn test_typecheck_error_unknown_function() {
         let src = "foo :: (): int { unknown_func(1) }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_err());
 
         let err = result.unwrap_err();
@@ -1122,21 +1381,21 @@ mod tests {
     #[test]
     fn test_typecheck_nested_if() {
         let src = "foo :: (x: int): int { if 1 { if 1 { y : int = 1 } } }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_typecheck_multiple_params() {
         let src = "foo :: (a: int, b: int, c: int): int { sum : int = 1 + 2 + 3 }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_typecheck_procedure_infers_fn_type() {
         let src = "foo :: (x: int): int { y : int = 1 }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
 
         let module = result.unwrap();
@@ -1154,7 +1413,7 @@ mod tests {
     #[test]
     fn test_typecheck_multiple_declarations() {
         let src = "CONST :: 10 \n bar :: (x: int): int { y : int = 1 } \n foo :: (a: int): int { bar(1) }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
 
         let module = result.unwrap();
@@ -1164,7 +1423,7 @@ mod tests {
     #[test]
     fn test_typecheck_constant_with_type_annotation() {
         let src = "MY_CONST : int : 42";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
 
         let module = result.unwrap();
@@ -1178,7 +1437,7 @@ mod tests {
     #[test]
     fn test_typecheck_constant_with_binop() {
         let src = "MY_CONST :: 1 + 2 * 3";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
 
         let module = result.unwrap();
@@ -1192,14 +1451,14 @@ mod tests {
     #[test]
     fn test_typecheck_empty_procedure() {
         let src = "foo :: () {}";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_typecheck_procedure_with_return_type() {
         let src = "foo :: (): int {}";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
 
         let module = result.unwrap();
@@ -1216,7 +1475,7 @@ mod tests {
     #[test]
     fn test_typecheck_val_dec_infers_int_from_literal() {
         let src = "foo :: (): int { y := 42 }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
 
         let module = result.unwrap();
@@ -1234,28 +1493,28 @@ mod tests {
     #[test]
     fn test_typecheck_multiple_val_decs() {
         let src = "foo :: (): int { a : int = 1 \n b : int = 2 \n c : int = 3 }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_typecheck_val_dec_uses_previous_val() {
         let src = "foo :: (): int { a : int = 1 \n b : int = a }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_typecheck_assignment_to_declared_var() {
         let src = "foo :: (): int { a : int = 1 \n a = 2 }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_typecheck_error_assignment_to_undeclared_var() {
         let src = "foo :: (): int { a = 1 }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_err());
 
         let err = result.unwrap_err();
@@ -1265,7 +1524,7 @@ mod tests {
     #[test]
     fn test_typecheck_variant_type() {
         let src = "foo :: (): int { x := None }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
 
         let module = result.unwrap();
@@ -1290,7 +1549,7 @@ mod tests {
     #[test]
     fn test_typecheck_variant_type_with_args() {
         let src = "foo :: (): int { x : Some(int) | None = Some(1) }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
 
         let module = result.unwrap();
@@ -1315,28 +1574,28 @@ mod tests {
     #[test]
     fn test_typecheck_subtyping_record() {
         let src = "foo :: () { x : { a: int } = { a := 1, b := 2 } }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_comptime_constant_evaluation() {
         let src = "MY_CONST :: 1 + 2 * 3";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_comptime_bool_evaluation() {
         let src = "TRUE_CONST :: true and false";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_monomorphization_basic_comptime_type() {
         let src = "identity :: (comptime T: type, x: T): T { return x }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
         let module = result.unwrap();
 
@@ -1364,7 +1623,7 @@ mod tests {
     #[test]
     fn test_monomorphization_multiple_comptime_params() {
         let src = "first :: (comptime T: type, comptime U: type, a: T, b: U): T { return a }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
         let module = result.unwrap();
 
@@ -1387,7 +1646,7 @@ mod tests {
     #[test]
     fn test_monomorphization_mixed_params() {
         let src = "wrap :: (comptime T: type, x: T, y: int): T { return x }";
-        let result = typecheck_src(src);
+        let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
         let module = result.unwrap();
 
@@ -1404,5 +1663,89 @@ mod tests {
             assert!(!params[1].is_comptime);
             assert!(!params[2].is_comptime);
         }
+    }
+
+    #[test]
+    fn test_monomorphization_basic() {
+        let src = "identity :: (comptime T: type, x: T): T { return x } \n main :: () { y : int = identity(int, 42) }";
+        let (ctx, result) = typecheck_src(src);
+        assert!(result.is_ok(), "typechecking failed: {:?}", result);
+        let module = result.unwrap();
+
+        let monomorph_decl = module.declarations.iter().find(|d| {
+            if let DeclKind::Procedure { name, .. } = &d.node {
+                ctx.resolve(name.node).starts_with("identity_TInt")
+            } else {
+                false
+            }
+        });
+        assert!(
+            monomorph_decl.is_some(),
+            "monomorphized identity_TInt not found"
+        );
+
+        let monomorph = monomorph_decl.unwrap();
+        if let DeclKind::Procedure {
+            sig, monomorph_of, ..
+        } = &monomorph.node
+        {
+            assert!(monomorph_of.is_some(), "monomorph_of should be set");
+            let params = &sig.node.params.params;
+            assert_eq!(params.len(), 2);
+            assert!(!params[0].is_comptime, "T param should become runtime");
+            assert!(!params[1].is_comptime, "x param should remain runtime");
+        }
+    }
+
+    #[test]
+    fn test_monomorphization_multiple_types() {
+        let src = "first :: (comptime T: type, comptime U: type, a: T, b: U): T { return a } \n main :: () { x : int = first(int, bool, 42, true) }";
+        let (ctx, result) = typecheck_src(src);
+        assert!(result.is_ok(), "typechecking failed: {:?}", result);
+        let module = result.unwrap();
+
+        let monomorph_decl = module.declarations.iter().find(|d| {
+            if let DeclKind::Procedure { name, .. } = &d.node {
+                ctx.resolve(name.node).starts_with("first_TInt_TBool")
+            } else {
+                false
+            }
+        });
+        assert!(
+            monomorph_decl.is_some(),
+            "monomorphized first_TInt_TBool not found"
+        );
+    }
+
+    #[test]
+    fn test_monomorphization_different_instances() {
+        let src = "double :: (comptime T: type, x: T): T { return x } \n main :: () { a : int = double(int, 42) \n b : bool = double(bool, true) }";
+        let (ctx, result) = typecheck_src(src);
+        assert!(result.is_ok(), "typechecking failed: {:?}", result);
+        let module = result.unwrap();
+
+        let int_monomorph = module.declarations.iter().find(|d| {
+            if let DeclKind::Procedure { name, .. } = &d.node {
+                ctx.resolve(name.node).starts_with("double_TInt")
+            } else {
+                false
+            }
+        });
+        assert!(
+            int_monomorph.is_some(),
+            "monomorphized double_TInt not found"
+        );
+
+        let bool_monomorph = module.declarations.iter().find(|d| {
+            if let DeclKind::Procedure { name, .. } = &d.node {
+                ctx.resolve(name.node).starts_with("double_TBool")
+            } else {
+                false
+            }
+        });
+        assert!(
+            bool_monomorph.is_some(),
+            "monomorphized double_TBool not found"
+        );
     }
 }

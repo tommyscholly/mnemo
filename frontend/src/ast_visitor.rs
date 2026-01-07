@@ -416,6 +416,11 @@ impl AstVisitor for AstToMIR<'_> {
                     let op = mir::Operand::Copy(place);
                     mir::RValue::Use(op)
                 }
+                ValueKind::Type(_) => {
+                    // Type literals should never reach code generation
+                    // After monomorphization, comptime type params are substituted
+                    unreachable!("type literal in value position during codegen")
+                }
             },
             ExprKind::BinOp { op, lhs, rhs } => {
                 let lhs = self.visit_expr(*lhs);

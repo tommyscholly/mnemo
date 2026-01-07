@@ -441,6 +441,22 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
             ExprKind::Value(ValueKind::Bool(false)),
             token.span,
         )),
+        Token::Keyword(Keyword::Int) => Ok(Spanned::new(
+            ExprKind::Value(ValueKind::Type(TypeKind::Int)),
+            token.span,
+        )),
+        Token::Keyword(Keyword::Bool) => Ok(Spanned::new(
+            ExprKind::Value(ValueKind::Type(TypeKind::Bool)),
+            token.span,
+        )),
+        Token::Keyword(Keyword::Char) => Ok(Spanned::new(
+            ExprKind::Value(ValueKind::Type(TypeKind::Char)),
+            token.span,
+        )),
+        Token::Keyword(Keyword::Type) => Ok(Spanned::new(
+            ExprKind::Value(ValueKind::Type(TypeKind::Type)),
+            token.span,
+        )),
         Token::String(s) => Ok(Spanned::new(
             ExprKind::Allocation {
                 kind: AllocKind::Str(s),
