@@ -1,5 +1,5 @@
-printf :: extern (fmt_str: ^char, int_param: int)
-puts :: extern (s: ^char)
+printf :: extern (fmt: ^char, ...) : int
+puts :: extern (s: ^char) : int
 
 allocation_function :: () : [2]{int} @ R
 // allocates introduces a new region `R` that the function may allocate in

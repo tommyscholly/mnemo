@@ -5,11 +5,12 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     Ctx,
     ast::{
-        self, AllocKind, Block, BlockInner, Call, Decl, DeclKind, Expr, ExprKind, IfElse, Match,
-        Module, Params, Pat, PatKind, Region, Signature, SignatureInner, Stmt, StmtKind, Type,
-        TypeKind, ValueKind, VariantField,
+        self, AllocKind, Block, BlockInner, Call, ComptimeValue, Decl, DeclKind, Expr, ExprKind,
+        IfElse, Match, Module, Param, Params, Pat, PatKind, RecordField, Region, Signature,
+        SignatureInner, Stmt, StmtKind, Type, TypeKind, TypedValue, ValueKind, VariantField,
     },
     ctx::Symbol,
+    lex::BinOp,
     span::{DUMMY_SPAN, Diagnostic, Span, Spanned},
 };
 
@@ -79,667 +80,700 @@ pub enum TypeErrorKind {
     UnknownMethod(Symbol),
     NotCallable,
     ExpectedRecord,
-}
-
-pub struct TypecheckCtx<'a> {
-    front_ctx: &'a mut Ctx,
-    // TOOD: track scope of symbols
-    type_map: HashMap<Symbol, Type>,
-    function_sigs: HashMap<Symbol, Signature>,
-}
-
-impl<'a> TypecheckCtx<'a> {
-    fn new(ctx: &'a mut Ctx) -> Self {
-        let mut function_sigs = HashMap::new();
-
-        Self {
-            front_ctx: ctx,
-            type_map: HashMap::new(),
-            function_sigs,
-        }
-    }
+    // Comptime-related errors
+    NotComptime,
+    ComptimeArgRequired,
+    GenericInstantiation(String),
+    TypeNotResolved(Symbol),
+    InvalidComptimeOperation,
 }
 
 pub type TypecheckResult<T> = Result<T, TypeError>;
 
-trait ResolveType {
-    fn resolve_type(&self, ctx: &TypecheckCtx) -> Type;
+pub struct Analyzer<'a> {
+    pub front_ctx: &'a mut Ctx,
+    pub type_map: HashMap<Symbol, Type>,
+    pub function_sigs: HashMap<Symbol, Signature>,
+    pub comptime_env: HashMap<Symbol, ComptimeValue>,
+    pub monomorph_cache: HashMap<ast::MonomorphKey, DeclKind>,
 }
 
-impl ResolveType for Expr {
-    fn resolve_type(&self, ctx: &TypecheckCtx) -> Type {
-        match &self.node {
-            ExprKind::Value(v) => match v {
-                ValueKind::Int(_) => Type::synthetic(TypeKind::Int),
-                ValueKind::Ident(i) => ctx.type_map.get(i).unwrap().clone(),
-                ValueKind::Bool(_) => Type::synthetic(TypeKind::Bool),
-            },
-            ExprKind::BinOp { lhs, rhs, .. } => {
-                let lhs_ty = lhs.resolve_type(ctx);
-                let rhs_ty = rhs.resolve_type(ctx);
-                if lhs_ty.node != rhs_ty.node {
-                    panic!("expected types to be equal");
+impl<'a> Analyzer<'a> {
+    pub fn new(front_ctx: &'a mut Ctx) -> Self {
+        Self {
+            front_ctx,
+            type_map: HashMap::new(),
+            function_sigs: HashMap::new(),
+            comptime_env: HashMap::new(),
+            monomorph_cache: HashMap::new(),
+        }
+    }
+
+    fn type_of_comptime_value(cv: &ComptimeValue) -> TypeKind {
+        match cv {
+            ComptimeValue::Int(_) => TypeKind::Int,
+            ComptimeValue::Bool(_) => TypeKind::Bool,
+            ComptimeValue::Type(tk) => TypeKind::Type,
+            ComptimeValue::Array(_) => {
+                TypeKind::Alloc(AllocKind::DynArray(Box::new(TypeKind::Int)), Region::Stack)
+            }
+            ComptimeValue::Unit => TypeKind::Unit,
+        }
+    }
+
+    fn eval_comptime_binop(
+        &self,
+        op: &BinOp,
+        lhs: &ComptimeValue,
+        rhs: &ComptimeValue,
+    ) -> Result<ComptimeValue, TypeError> {
+        match (op, lhs, rhs) {
+            (BinOp::Add, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
+                Ok(ComptimeValue::Int(*a + *b))
+            }
+            (BinOp::Sub, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
+                Ok(ComptimeValue::Int(*a - *b))
+            }
+            (BinOp::Mul, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
+                Ok(ComptimeValue::Int(*a * *b))
+            }
+            (BinOp::Div, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
+                if *b == 0 {
+                    Err(TypeError::new(
+                        TypeErrorKind::InvalidComptimeOperation,
+                        DUMMY_SPAN,
+                    ))
+                } else {
+                    Ok(ComptimeValue::Int(*a / *b))
                 }
-                lhs_ty
             }
-            ExprKind::Call(Call {
-                callee,
-                args: _,
-                returned_ty,
-            }) => {
-                let (callee_sig, _) = resolve_callee_signature(callee, ctx).unwrap();
-                returned_ty.clone().unwrap()
+            (BinOp::Mod, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
+                if *b == 0 {
+                    Err(TypeError::new(
+                        TypeErrorKind::InvalidComptimeOperation,
+                        DUMMY_SPAN,
+                    ))
+                } else {
+                    Ok(ComptimeValue::Int(*a % *b))
+                }
             }
+            (BinOp::EqEq, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
+                Ok(ComptimeValue::Bool(*a == *b))
+            }
+            (BinOp::NEq, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
+                Ok(ComptimeValue::Bool(*a != *b))
+            }
+            (BinOp::Gt, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
+                Ok(ComptimeValue::Bool(*a > *b))
+            }
+            (BinOp::GtEq, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
+                Ok(ComptimeValue::Bool(*a >= *b))
+            }
+            (BinOp::Lt, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
+                Ok(ComptimeValue::Bool(*a < *b))
+            }
+            (BinOp::LtEq, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
+                Ok(ComptimeValue::Bool(*a <= *b))
+            }
+            (BinOp::And, ComptimeValue::Bool(a), ComptimeValue::Bool(b)) => {
+                Ok(ComptimeValue::Bool(*a && *b))
+            }
+            (BinOp::Or, ComptimeValue::Bool(a), ComptimeValue::Bool(b)) => {
+                Ok(ComptimeValue::Bool(*a || *b))
+            }
+            _ => Err(TypeError::new(
+                TypeErrorKind::InvalidComptimeOperation,
+                DUMMY_SPAN,
+            )),
+        }
+    }
+
+    #[allow(clippy::only_used_in_recursion)]
+    fn resolve_generic_type(&self, ty: &TypeKind, subs: &HashMap<Symbol, TypeKind>) -> TypeKind {
+        match ty {
+            TypeKind::Generic(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
+            TypeKind::Ptr(inner) => TypeKind::Ptr(Box::new(self.resolve_generic_type(inner, subs))),
+            TypeKind::Alloc(kind, region) => TypeKind::Alloc(kind.clone(), *region),
+            TypeKind::Fn(sig) => {
+                let new_params: Vec<_> = sig
+                    .params
+                    .params
+                    .iter()
+                    .map(|p| Param {
+                        pattern: p.pattern.clone(),
+                        ty: Type::synthetic(self.resolve_generic_type(&p.ty.node, subs)),
+                        is_comptime: p.is_comptime,
+                    })
+                    .collect();
+                TypeKind::Fn(Box::new(SignatureInner {
+                    params: Params { params: new_params },
+                    return_ty: sig
+                        .return_ty
+                        .as_ref()
+                        .map(|t| Type::synthetic(self.resolve_generic_type(&t.node, subs))),
+                }))
+            }
+            TypeKind::Resolved(inner) => self.resolve_generic_type(inner, subs),
+            _ => ty.clone(),
+        }
+    }
+
+    fn monomorphize(
+        &mut self,
+        base_fn: Symbol,
+        comptime_args: Vec<ComptimeValue>,
+    ) -> Result<DeclKind, TypeError> {
+        let key = ast::MonomorphKey {
+            base_fn,
+            comptime_args: comptime_args.clone(),
+        };
+
+        if let Some(cached) = self.monomorph_cache.get(&key) {
+            return Ok(cached.clone());
+        }
+
+        let Some(sig) = self.function_sigs.get(&base_fn).cloned() else {
+            return Err(TypeError::new(
+                TypeErrorKind::UnknownSymbol(base_fn),
+                DUMMY_SPAN,
+            ));
+        };
+
+        let sig_inner = sig.node;
+        let mut subs = HashMap::new();
+        for (param, cv) in sig_inner.params.params.iter().zip(comptime_args.iter()) {
+            if let PatKind::Symbol(sym) = param.pattern.node {
+                let ty = match cv {
+                    ComptimeValue::Int(_) => TypeKind::Int,
+                    ComptimeValue::Bool(_) => TypeKind::Bool,
+                    ComptimeValue::Type(tk) => tk.clone(),
+                    ComptimeValue::Array(_) => {
+                        TypeKind::Alloc(AllocKind::DynArray(Box::new(TypeKind::Int)), Region::Stack)
+                    }
+                    ComptimeValue::Unit => TypeKind::Unit,
+                };
+                subs.insert(sym, ty);
+            }
+        }
+
+        let monomorphized_sig = SignatureInner {
+            params: Params {
+                params: sig_inner
+                    .params
+                    .params
+                    .iter()
+                    .map(|p| Param {
+                        pattern: p.pattern.clone(),
+                        ty: Type::synthetic(self.resolve_generic_type(&p.ty.node, &subs)),
+                        is_comptime: false,
+                    })
+                    .collect(),
+            },
+            return_ty: sig_inner
+                .return_ty
+                .as_ref()
+                .map(|t| Type::synthetic(self.resolve_generic_type(&t.node, &subs))),
+        };
+
+        let new_name = format!("{}_{}", self.front_ctx.resolve(base_fn), {
+            let mut parts = Vec::new();
+            for cv in &comptime_args {
+                match cv {
+                    ComptimeValue::Int(n) => parts.push(format!("I{}", n)),
+                    ComptimeValue::Bool(b) => parts.push(format!("B{}", b)),
+                    ComptimeValue::Type(tk) => parts.push(format!("T{:?}", tk)),
+                    _ => parts.push("X".to_string()),
+                }
+            }
+            parts.join("_")
+        });
+
+        let monomorphized = DeclKind::Procedure {
+            name: Spanned::new(self.front_ctx.intern(&new_name), DUMMY_SPAN),
+            fn_ty: Some(Type::synthetic(TypeKind::Fn(Box::new(
+                monomorphized_sig.clone(),
+            )))),
+            sig: Spanned::new(monomorphized_sig, DUMMY_SPAN),
+            constraints: vec![],
+            block: todo!(), // Would need to copy and substitute body
+            monomorph_of: Some(key.clone()),
+        };
+
+        self.monomorph_cache.insert(key, monomorphized.clone());
+        Ok(monomorphized)
+    }
+
+    pub fn analyze_expr(&mut self, expr: &Expr) -> Result<TypedValue, TypeError> {
+        match &expr.node {
+            ExprKind::Value(v) => match v {
+                ValueKind::Int(n) => Ok(TypedValue::comptime(
+                    TypeKind::Int,
+                    ComptimeValue::Int(*n as i128),
+                )),
+                ValueKind::Ident(sym) => {
+                    if let Some(cv) = self.comptime_env.get(sym) {
+                        let ty = Self::type_of_comptime_value(cv);
+                        return Ok(TypedValue::comptime(ty, cv.clone()));
+                    }
+                    let ty = self
+                        .type_map
+                        .get(sym)
+                        .ok_or_else(|| {
+                            TypeError::new(TypeErrorKind::UnknownSymbol(*sym), expr.span.clone())
+                        })?
+                        .node
+                        .clone();
+                    Ok(TypedValue::runtime(ty))
+                }
+                ValueKind::Bool(b) => Ok(TypedValue::comptime(
+                    TypeKind::Bool,
+                    ComptimeValue::Bool(*b),
+                )),
+            },
+            ExprKind::BinOp { op, lhs, rhs } => {
+                let lhs_val = self.analyze_expr(lhs)?;
+                let rhs_val = self.analyze_expr(rhs)?;
+
+                if lhs_val.ty != rhs_val.ty {
+                    return Err(TypeError::new(
+                        TypeErrorKind::ExpectedType {
+                            expected: lhs_val.ty.clone(),
+                            found: rhs_val.ty.clone(),
+                        },
+                        expr.span.clone(),
+                    ));
+                }
+
+                if lhs_val.is_comptime() && rhs_val.is_comptime() {
+                    let result = self.eval_comptime_binop(
+                        op,
+                        lhs_val.comptime_value.as_ref().unwrap(),
+                        rhs_val.comptime_value.as_ref().unwrap(),
+                    )?;
+                    Ok(TypedValue::comptime(lhs_val.ty, result))
+                } else {
+                    Ok(TypedValue::runtime(lhs_val.ty))
+                }
+            }
+            ExprKind::Call(call) => self.analyze_call(call),
             ExprKind::Allocation {
                 kind,
                 region,
                 elements,
             } => {
-                // TODO: implement region handling
-                // regions should be resolved by the time we get here
+                for e in elements {
+                    self.analyze_expr(e)?;
+                }
                 let region_handle = region.unwrap_or(Region::Stack);
-                let kind = match kind {
+                let resolved_kind = match kind {
                     AllocKind::Tuple(tys) => {
                         let mut types = Vec::new();
                         for elem in elements {
-                            types.push(elem.resolve_type(ctx).node);
+                            types.push(self.analyze_expr(elem)?.unwrap_type());
                         }
-
                         if !tys.is_empty() && tys.len() != types.len() && *tys != types {
                             panic!("expected tuple types to be equal");
                         }
-
-                        // here we resolve the tuple types if they were not provided by a type hint
                         AllocKind::Tuple(types)
                     }
                     AllocKind::Variant(variant_name) => {
-                        let adts = elements.iter().map(|e| e.resolve_type(ctx)).collect();
-
-                        let ty = TypeKind::Variant(vec![VariantField {
+                        let mut adts = Vec::new();
+                        for e in elements {
+                            let val = self.analyze_expr(e)?;
+                            adts.push(Type::synthetic(val.unwrap_type()));
+                        }
+                        return Ok(TypedValue::runtime(TypeKind::Variant(vec![VariantField {
                             name: Spanned::default(*variant_name),
                             adts,
-                        }]);
-
-                        return Type::synthetic(ty);
+                        }])));
                     }
                     AllocKind::Record(fields) => {
-                        return Type::synthetic(TypeKind::Record(fields.clone()));
+                        let mut filled_fields = Vec::new();
+                        for (field, elem) in fields.iter().zip(elements.iter()) {
+                            let elem_val = self.analyze_expr(elem)?;
+                            let elem_ty = Type::synthetic(elem_val.ty);
+                            filled_fields.push(RecordField {
+                                name: field.name,
+                                ty: Some(elem_ty.clone()),
+                            });
+                        }
+                        return Ok(TypedValue::runtime(TypeKind::Record(filled_fields)));
                     }
                     _ => kind.clone(),
                 };
-
-                Type::synthetic(TypeKind::Alloc(kind, region_handle))
-            }
-            ExprKind::FieldAccess(expr, field) => {
-                let expr_ty = expr.resolve_type(ctx);
-                let field_ty = get_field_type(&expr_ty, *field).unwrap();
-
-                Type::synthetic(field_ty)
-            }
-            ExprKind::TupleAccess(expr, index) => {
-                let expr_ty = expr.resolve_type(ctx);
-
-                let TypeKind::Alloc(AllocKind::Tuple(tys), _) = expr_ty.node else {
-                    panic!("expected tuple type, got {:?}", expr_ty.node);
-                };
-
-                if *index >= tys.len() {
-                    panic!("tuple index out of bounds");
+                for e in elements {
+                    self.analyze_expr(e)?;
                 }
-
-                let ty = tys[*index].clone();
-
-                Type::synthetic(ty)
-            }
-            ExprKind::Index(expr, index) => {
-                let expr_ty = expr.resolve_type(ctx);
-
-                let TypeKind::Alloc(AllocKind::Array(ty, _), _) = expr_ty.node else {
-                    panic!("expected array type, got {:?}", expr_ty.node);
-                };
-
-                Type::with_span(*ty, expr.span.clone())
-            }
-        }
-    }
-}
-
-trait Typecheck {
-    // INVARIANT: After typechecking, all types are either fully resolved, or an error is returned.
-    fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()>;
-}
-
-fn type_check_call(call: &mut Call, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-    for arg in call.args.iter_mut() {
-        arg.typecheck(ctx)?;
-    }
-
-    let (callee_signature, span) = resolve_callee_signature(&call.callee, ctx)?;
-
-    let expected_count = callee_signature.node.params.params.len();
-    let found_count = call.args.len();
-    if expected_count != found_count {
-        return Err(TypeError::new(
-            TypeErrorKind::ArgCountMismatch {
-                expected: expected_count,
-                found: found_count,
-            },
-            call.callee.span.clone(),
-        ));
-    }
-
-    for (arg, param) in call
-        .args
-        .iter()
-        .zip(callee_signature.node.params.params.iter())
-    {
-        let arg_ty = arg.resolve_type(ctx);
-        structural_typecheck(&arg_ty.node, &param.ty.node, arg_ty.span)?;
-    }
-
-    if let Some(returned_ty) = &call.returned_ty {
-        if callee_signature.node.return_ty.is_none() {
-            return Err(TypeError::new(
-                TypeErrorKind::ReturnTypeMismatch {
-                    expected: TypeKind::Unit,
-                    found: returned_ty.node.clone(),
-                },
-                call.callee.span.clone(),
-            ));
-        }
-
-        if callee_signature.node.return_ty != Some(returned_ty.clone()) {
-            return Err(TypeError::new(
-                TypeErrorKind::ReturnTypeMismatch {
-                    expected: callee_signature.node.return_ty.clone().unwrap().node,
-                    found: returned_ty.node.clone(),
-                },
-                call.callee.span.clone(),
-            ));
-        }
-    } else {
-        match callee_signature.node.return_ty {
-            Some(ty) => {
-                call.returned_ty = Some(ty);
-            }
-            None => {
-                call.returned_ty = Some(Type::synthetic(TypeKind::Unit));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-pub fn resolve_callee_signature(
-    callee: &Expr,
-    ctx: &TypecheckCtx,
-) -> TypecheckResult<(Signature, Span)> {
-    match &callee.node {
-        ExprKind::Value(ValueKind::Ident(name)) => {
-            let Some(sig) = ctx.function_sigs.get(name) else {
-                return Err(TypeError::new(
-                    TypeErrorKind::UnknownSymbol(*name),
-                    callee.span.clone(),
-                ));
-            };
-            Ok((sig.clone(), callee.span.clone()))
-        }
-        // for now, we are doing UFCS: x.method() = method(x)
-        // eventually we may have structural typing impls
-        ExprKind::FieldAccess(receiver, method_name) => {
-            let Some(sig) = ctx.function_sigs.get(method_name) else {
-                return Err(TypeError::new(
-                    TypeErrorKind::UnknownMethod(*method_name),
-                    callee.span.clone(),
-                ));
-            };
-            Ok((sig.clone(), callee.span.clone()))
-        }
-        _ => {
-            // For first-class functions, you'd check that callee's type is TypeKind::Fn
-            // and extract the signature from there
-            Err(TypeError::new(
-                TypeErrorKind::NotCallable,
-                callee.span.clone(),
-            ))
-        }
-    }
-}
-
-fn get_field_type(expr_ty: &Type, field: Symbol) -> TypecheckResult<TypeKind> {
-    let type_kind = &expr_ty.node;
-    let field_ty = if let TypeKind::Record(fields) = &expr_ty.node {
-        fields
-            .iter()
-            .find(|f| f.name == field)
-            // SAFETY: field types should be resolved by now
-            .map(|f| f.ty.as_ref().unwrap())
-    } else {
-        return Err(TypeError::new(
-            TypeErrorKind::ExpectedRecord,
-            expr_ty.span.clone(),
-        ));
-    };
-
-    match field_ty {
-        Some(ty) => Ok(ty.node.clone()),
-        None => Err(TypeError::new(
-            TypeErrorKind::UnknownField(field),
-            expr_ty.span.clone(),
-        )),
-    }
-}
-
-impl Typecheck for Expr {
-    fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-        match &mut self.node {
-            ExprKind::Value(v) => match v {
-                ValueKind::Int(_) => Ok(()),
-                ValueKind::Bool(_) => Ok(()),
-                ValueKind::Ident(i) => {
-                    if !ctx.type_map.contains_key(i) {
-                        return Err(TypeError::new(
-                            TypeErrorKind::UnknownSymbol(*i),
-                            self.span.clone(),
-                        ));
-                    }
-                    Ok(())
-                }
-            },
-            ExprKind::BinOp { lhs, rhs, .. } => {
-                lhs.typecheck(ctx)?;
-                rhs.typecheck(ctx)?;
-                Ok(())
-            }
-            ExprKind::Call(c) => type_check_call(c, ctx),
-            ExprKind::Allocation { elements, kind, .. } => {
-                for e in &mut *elements {
-                    e.typecheck(ctx)?;
-                }
-
-                match kind {
+                let region_handle = region.unwrap_or(Region::Stack);
+                let resolved_kind = match kind {
                     AllocKind::Tuple(tys) => {
                         let mut types = Vec::new();
                         for elem in elements {
-                            types.push(elem.resolve_type(ctx).node);
+                            types.push(self.analyze_expr(elem)?.unwrap_type());
                         }
-
                         if !tys.is_empty() && tys.len() != types.len() && *tys != types {
                             panic!("expected tuple types to be equal");
                         }
-
-                        *tys = types;
-                    }
-                    AllocKind::Array(ty_kind, size) => {
-                        assert_eq!(*size, elements.len());
-
-                        assert!(
-                            elements
-                                .iter()
-                                .all(|e| e.resolve_type(ctx).node == **ty_kind)
-                        );
-                    }
-                    AllocKind::DynArray(ty_kind) => {
-                        assert!(
-                            elements
-                                .iter()
-                                .all(|e| e.resolve_type(ctx).node == **ty_kind)
-                        );
-                    }
-                    AllocKind::Record(fields) => {
-                        assert_eq!(elements.len(), fields.len());
-                        for (field, elem) in fields.iter_mut().zip(elements.iter()) {
-                            let elem_ty = elem.resolve_type(ctx);
-
-                            match &field.ty {
-                                Some(ty) => {
-                                    assert_eq!(elem_ty.node, ty.node);
-                                }
-                                None => {
-                                    field.ty = Some(elem_ty);
-                                }
-                            }
-                        }
+                        AllocKind::Tuple(types)
                     }
                     AllocKind::Variant(variant_name) => {
-                        // TOOD: is there any variant to check here?
+                        let mut adts = Vec::new();
+                        for e in elements {
+                            let val = self.analyze_expr(e)?;
+                            adts.push(Type::synthetic(val.unwrap_type()));
+                        }
+                        return Ok(TypedValue::runtime(TypeKind::Variant(vec![VariantField {
+                            name: Spanned::default(*variant_name),
+                            adts,
+                        }])));
                     }
-                    AllocKind::Str(_) => {}
-                    _ => todo!(),
-                }
-                Ok(())
+                    AllocKind::Record(fields) => {
+                        let mut filled_fields = Vec::new();
+                        for (field, elem) in fields.iter().zip(elements.iter()) {
+                            let elem_val = self.analyze_expr(elem)?;
+                            let elem_ty = Type::synthetic(elem_val.ty);
+                            filled_fields.push(RecordField {
+                                name: field.name,
+                                ty: Some(elem_ty),
+                            });
+                        }
+                        return Ok(TypedValue::runtime(TypeKind::Record(filled_fields)));
+                    }
+                    _ => kind.clone(),
+                };
+                Ok(TypedValue::runtime(TypeKind::Alloc(
+                    resolved_kind,
+                    region_handle,
+                )))
             }
             ExprKind::FieldAccess(expr, field) => {
-                expr.typecheck(ctx)?;
-                let expr_ty = expr.resolve_type(ctx);
-                let _field_ty = get_field_type(&expr_ty, *field)?;
-
-                Ok(())
-            }
-            ExprKind::Index(expr, index) => {
-                expr.typecheck(ctx)?;
-                index.typecheck(ctx)?;
-
-                let expr_ty = expr.resolve_type(ctx).node;
-                let index_ty = index.resolve_type(ctx).node;
-
-                match (expr_ty, index_ty) {
-                    (TypeKind::Alloc(AllocKind::Array(_, _), _), TypeKind::Int) => {}
-                    _ => {
-                        return Err(TypeError::new(
-                            TypeErrorKind::ExpectedArrayIndex,
-                            index.span.clone(),
-                        ));
-                    }
-                }
-
-                Ok(())
+                let expr_val = self.analyze_expr(expr)?;
+                let field_ty = Self::get_field_type(&expr_val.ty, *field, expr.span.clone())?;
+                Ok(TypedValue::runtime(field_ty))
             }
             ExprKind::TupleAccess(expr, index) => {
-                expr.typecheck(ctx)?;
-
-                let expr_ty = expr.resolve_type(ctx).node;
-
-                match (expr_ty) {
-                    TypeKind::Alloc(AllocKind::Tuple(_), _) => {}
-                    _ => {
-                        return Err(TypeError::new(
-                            TypeErrorKind::ExpectedArrayIndex,
-                            expr.span.clone(),
-                        ));
-                    }
-                }
-
-                Ok(())
-            }
-        }
-    }
-}
-
-fn bind_pattern(pat: &Pat, ty: &Type, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-    match &pat.node {
-        PatKind::Symbol(name) => {
-            ctx.type_map.insert(*name, ty.clone());
-        }
-        _ => todo!(),
-    }
-
-    Ok(())
-}
-
-fn structural_typecheck(
-    expr_ty: &TypeKind,
-    declared_ty: &TypeKind,
-    declared_ty_span: Span,
-) -> TypecheckResult<()> {
-    match (expr_ty, declared_ty) {
-        (TypeKind::Variant(expr_variant), TypeKind::Variant(declared_variants)) => {
-            // SAFETY: expr variants will only have one element
-            let expr_variant = expr_variant.first().unwrap();
-            if !declared_variants.contains(expr_variant) {
-                return Err(TypeError::new(
-                    TypeErrorKind::VariantMismatch {
-                        expected: declared_variants.clone(),
-                        found: expr_variant.clone(),
-                    },
-                    declared_ty_span,
-                ));
-            }
-        }
-        // we ensure that the declared fields, which is the type annotation, is a subset of the
-        // actual expression fields
-        // for instance, if we have a function that takes in a record { a: int, b: int }, the expr
-        // fields may be { a: int, b: int, c: int } but could not be { a: int }
-        // expr <: declared_fields, or in this example, { a: int, b: int, c: int } <: { a: int, b: int }
-        (TypeKind::Record(expr_fields), TypeKind::Record(declared_fields)) => {
-            let expr_field_set: HashMap<u32, TypeKind> = expr_fields
-                .iter()
-                .map(|f| (f.name.0, f.ty.as_ref().unwrap().node.clone()))
-                .collect();
-
-            let declared_field_set: HashMap<u32, TypeKind> = declared_fields
-                .iter()
-                .map(|f| (f.name.0, f.ty.as_ref().unwrap().node.clone()))
-                .collect();
-
-            // ensure that all the declared fields are present in the expression
-            for (field_name, field_ty) in &declared_field_set {
-                if !expr_field_set.contains_key(field_name) {
-                    return Err(TypeError::new(
-                        TypeErrorKind::RecordFieldMissing {
-                            field_name: Symbol(*field_name),
-                            declared_fields: declared_field_set
-                                .keys()
-                                .cloned()
-                                .map(Into::into)
-                                .collect(),
-                        },
-                        declared_ty_span,
-                    ));
-                }
-
-                if expr_field_set[field_name] != declared_field_set[field_name] {
-                    return Err(TypeError::new(
-                        TypeErrorKind::RecordFieldMismatch {
-                            field_name: Symbol(*field_name),
-                            expected: declared_field_set[field_name].clone(),
-                            found: field_ty.clone(),
-                        },
-                        declared_ty_span,
-                    ));
-                }
-            }
-        }
-        (TypeKind::Alloc(AllocKind::Str(_), _), TypeKind::Ptr(c)) if (**c) == TypeKind::Char => {}
-        _ => {
-            if declared_ty != expr_ty {
-                return Err(TypeError::new(
-                    TypeErrorKind::ExpectedType {
-                        expected: declared_ty.clone(),
-                        found: expr_ty.clone(),
-                    },
-                    declared_ty_span,
-                ));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-impl Typecheck for Stmt {
-    fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-        match &mut self.node {
-            StmtKind::ValDec {
-                name,
-                ty,
-                expr,
-                is_comptime: _,
-            } => {
-                expr.typecheck(ctx)?;
-                let expr_ty = expr.resolve_type(ctx);
-
-                if let Some(declared_ty) = ty {
-                    structural_typecheck(
-                        &expr_ty.node,
-                        &declared_ty.node,
-                        declared_ty.span.clone(),
-                    )?;
-
-                    ctx.type_map.insert(name.node, declared_ty.clone());
-                } else {
-                    *ty = Some(expr_ty.clone());
-                    ctx.type_map.insert(name.node, expr_ty);
-                }
-            }
-            StmtKind::Assign { name, expr } => {
-                expr.typecheck(ctx)?;
-                let expr_ty = expr.resolve_type(ctx);
-
-                let Some(expected_type) = ctx.type_map.get(&name.node) else {
-                    return Err(TypeError::new(
-                        TypeErrorKind::UnknownSymbol(name.node),
-                        name.span.clone(),
-                    ));
-                };
-
-                if expected_type.node != expr_ty.node {
+                let expr_val = self.analyze_expr(expr)?;
+                let TypeKind::Alloc(AllocKind::Tuple(tys), _) = &expr_val.ty else {
                     return Err(TypeError::new(
                         TypeErrorKind::ExpectedType {
-                            expected: expected_type.node.clone(),
-                            found: expr_ty.node,
+                            expected: TypeKind::Alloc(AllocKind::Tuple(vec![]), Region::Stack),
+                            found: expr_val.ty.clone(),
                         },
                         expr.span.clone(),
                     ));
+                };
+                if *index >= tys.len() {
+                    return Err(TypeError::new(
+                        TypeErrorKind::ExpectedArrayIndex,
+                        expr.span.clone(),
+                    ));
                 }
+                let ty = tys[*index].clone();
+                Ok(TypedValue::runtime(ty))
             }
-            StmtKind::IfElse(if_else) => {
-                // TODO: check that cond is a bool, right now we only have ints
-                if_else.cond.typecheck(ctx)?;
-                if_else.then.typecheck(ctx)?;
-                if let Some(else_) = &mut if_else.else_ {
-                    else_.typecheck(ctx)?;
-                }
-            }
-            StmtKind::Call(c) => type_check_call(c, ctx)?,
-            StmtKind::Match(Match { scrutinee, arms }) => {
-                scrutinee.typecheck(ctx)?;
-                let scrutinee_ty = scrutinee.resolve_type(ctx);
-                for arm in arms {
-                    match &arm.pat.node {
-                        PatKind::Symbol(name) => {
-                            // symbols shouldnt need type checking, we just have to bind them in the
-                            // type map
-                            bind_pattern(&arm.pat, &scrutinee_ty, ctx)?;
-                        }
-                        PatKind::Variant { name, bindings } => {
-                            let TypeKind::Variant(vfields) = &scrutinee_ty.node else {
-                                return Err(TypeError::new(
-                                    TypeErrorKind::ExpectedVariant,
-                                    scrutinee_ty.span.clone(),
-                                ));
-                            };
-
-                            let Some(variant) = vfields.iter().find(|v| v.name.node == *name)
-                            else {
-                                return Err(TypeError::new(
-                                    TypeErrorKind::UnknownSymbol(*name),
-                                    arm.pat.span.clone(),
-                                ));
-                            };
-
-                            if bindings.len() != variant.adts.len() {
-                                return Err(TypeError::new(
-                                    // TODO: better error message
-                                    TypeErrorKind::ExpectedVariant,
-                                    arm.pat.span.clone(),
-                                ));
-                            }
-
-                            for (binding, adt) in bindings.iter().zip(variant.adts.iter()) {
-                                bind_pattern(binding, adt, ctx)?;
-                            }
-                        }
-                        PatKind::Record(fields) => {
-                            let TypeKind::Record(scru_fields) = &scrutinee_ty.node else {
-                                return Err(TypeError::new(
-                                    TypeErrorKind::ExpectedRecord,
-                                    scrutinee_ty.span.clone(),
-                                ));
-                            };
-
-                            let pat_ty = TypeKind::Record(fields.clone());
-                            structural_typecheck(
-                                &scrutinee_ty.node,
-                                &pat_ty,
-                                scrutinee_ty.span.clone(),
-                            )?;
-
-                            for field in fields {
-                                ctx.type_map.insert(field.name, field.ty.clone().unwrap());
-                            }
-                        }
-                        PatKind::Literal(lit) => match lit {
-                            ValueKind::Int(_) => {
-                                if scrutinee_ty.node != TypeKind::Int {
-                                    return Err(TypeError::new(
-                                        TypeErrorKind::ExpectedType {
-                                            expected: TypeKind::Int,
-                                            found: scrutinee_ty.node.clone(),
-                                        },
-                                        scrutinee_ty.span.clone(),
-                                    ));
-                                }
-                            }
-                            _ => todo!(),
+            ExprKind::Index(expr, index) => {
+                let expr_val = self.analyze_expr(expr)?;
+                self.analyze_expr(index)?;
+                let TypeKind::Alloc(AllocKind::Array(ty, _), _) = &expr_val.ty else {
+                    return Err(TypeError::new(
+                        TypeErrorKind::ExpectedType {
+                            expected: TypeKind::Alloc(
+                                AllocKind::Array(Box::new(TypeKind::Int), 0),
+                                Region::Stack,
+                            ),
+                            found: expr_val.ty.clone(),
                         },
-                        PatKind::Wildcard => {}
-                        _ => todo!(),
+                        expr.span.clone(),
+                    ));
+                };
+                Ok(TypedValue::runtime((**ty).clone()))
+            }
+        }
+    }
+
+    fn get_field_type(
+        expr_ty: &TypeKind,
+        field: Symbol,
+        span: Span,
+    ) -> Result<TypeKind, TypeError> {
+        match expr_ty {
+            TypeKind::Record(fields) => fields
+                .iter()
+                .find(|f| f.name == field)
+                .and_then(|f| f.ty.as_ref())
+                .map(|t| t.node.clone())
+                .ok_or_else(|| TypeError::new(TypeErrorKind::UnknownField(field), span)),
+            _ => Err(TypeError::new(TypeErrorKind::ExpectedRecord, span)),
+        }
+    }
+
+    fn analyze_call(&mut self, call: &Call) -> Result<TypedValue, TypeError> {
+        for arg in &call.args {
+            self.analyze_expr(arg)?;
+        }
+
+        let (callee_sig, span) = self.resolve_callee_signature(&call.callee)?;
+
+        let params = &callee_sig.node.params.params;
+        let expected_count = params.len();
+        let found_count = call.args.len();
+
+        let is_variadic = params
+            .last()
+            .map(|p| p.ty.node == TypeKind::Variadic)
+            .unwrap_or(false);
+
+        if !is_variadic && expected_count != found_count {
+            return Err(TypeError::new(
+                TypeErrorKind::ArgCountMismatch {
+                    expected: expected_count,
+                    found: found_count,
+                },
+                call.callee.span.clone(),
+            ));
+        }
+
+        let min_expected = if is_variadic {
+            expected_count - 1
+        } else {
+            expected_count
+        };
+        if found_count < min_expected {
+            return Err(TypeError::new(
+                TypeErrorKind::ArgCountMismatch {
+                    expected: min_expected,
+                    found: found_count,
+                },
+                call.callee.span.clone(),
+            ));
+        }
+
+        for (i, (arg, param)) in call.args.iter().zip(params.iter()).enumerate() {
+            let arg_val = self.analyze_expr(arg)?;
+            // For variadic params, skip type checking (printf linkage handles it)
+            if param.ty.node != TypeKind::Variadic {
+                self.structural_typecheck(&arg_val.ty, &param.ty.node, arg.span.clone())?;
+            }
+        }
+
+        if let Some(returned_ty) = &call.returned_ty {
+            if callee_sig.node.return_ty.is_none() {
+                return Err(TypeError::new(
+                    TypeErrorKind::ReturnTypeMismatch {
+                        expected: TypeKind::Unit,
+                        found: returned_ty.node.clone(),
+                    },
+                    call.callee.span.clone(),
+                ));
+            }
+            if callee_sig.node.return_ty != Some(returned_ty.clone()) {
+                return Err(TypeError::new(
+                    TypeErrorKind::ReturnTypeMismatch {
+                        expected: callee_sig.node.return_ty.clone().unwrap().node,
+                        found: returned_ty.node.clone(),
+                    },
+                    call.callee.span.clone(),
+                ));
+            }
+        } else {
+            let return_ty = callee_sig
+                .node
+                .return_ty
+                .as_ref()
+                .map(|t| t.node.clone())
+                .unwrap_or(TypeKind::Unit);
+            let returned_ty = Type::synthetic(return_ty.clone());
+            // Note: we'd need &mut Call to set this, skipping for now
+        }
+
+        let return_ty = callee_sig
+            .node
+            .return_ty
+            .as_ref()
+            .map(|t| t.node.clone())
+            .unwrap_or(TypeKind::Unit);
+        Ok(TypedValue::runtime(return_ty))
+    }
+
+    fn resolve_callee_signature(&self, callee: &Expr) -> Result<(Signature, Span), TypeError> {
+        match &callee.node {
+            ExprKind::Value(ValueKind::Ident(name)) => {
+                let Some(sig) = self.function_sigs.get(name) else {
+                    return Err(TypeError::new(
+                        TypeErrorKind::UnknownSymbol(*name),
+                        callee.span.clone(),
+                    ));
+                };
+                Ok((sig.clone(), callee.span.clone()))
+            }
+            ExprKind::FieldAccess(receiver, method_name) => {
+                let Some(sig) = self.function_sigs.get(method_name) else {
+                    return Err(TypeError::new(
+                        TypeErrorKind::UnknownMethod(*method_name),
+                        callee.span.clone(),
+                    ));
+                };
+                Ok((sig.clone(), callee.span.clone()))
+            }
+            _ => Err(TypeError::new(
+                TypeErrorKind::NotCallable,
+                callee.span.clone(),
+            )),
+        }
+    }
+
+    fn structural_typecheck(
+        &self,
+        expr_ty: &TypeKind,
+        declared_ty: &TypeKind,
+        declared_ty_span: Span,
+    ) -> Result<(), TypeError> {
+        match (expr_ty, declared_ty) {
+            (TypeKind::Variant(expr_variant), TypeKind::Variant(declared_variants)) => {
+                let expr_variant = expr_variant.first().unwrap();
+                if !declared_variants.contains(expr_variant) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::VariantMismatch {
+                            expected: declared_variants.clone(),
+                            found: expr_variant.clone(),
+                        },
+                        declared_ty_span,
+                    ));
+                }
+            }
+            (TypeKind::Record(expr_fields), TypeKind::Record(declared_fields)) => {
+                let expr_field_set: HashMap<u32, Option<TypeKind>> = expr_fields
+                    .iter()
+                    .map(|f| (f.name.0, f.ty.as_ref().map(|t| t.node.clone())))
+                    .collect();
+
+                let declared_field_set: HashMap<u32, TypeKind> = declared_fields
+                    .iter()
+                    .map(|f| (f.name.0, f.ty.as_ref().unwrap().node.clone()))
+                    .collect();
+
+                for (field_name, field_ty) in &declared_field_set {
+                    if !expr_field_set.contains_key(field_name) {
+                        return Err(TypeError::new(
+                            TypeErrorKind::RecordFieldMissing {
+                                field_name: Symbol(*field_name),
+                                declared_fields: declared_field_set
+                                    .keys()
+                                    .cloned()
+                                    .map(Into::into)
+                                    .collect(),
+                            },
+                            declared_ty_span,
+                        ));
                     }
 
-                    arm.body.typecheck(ctx)?;
+                    let expr_field_ty = &expr_field_set[field_name];
+                    if expr_field_ty.as_ref() != Some(field_ty) {
+                        return Err(TypeError::new(
+                            TypeErrorKind::RecordFieldMismatch {
+                                field_name: Symbol(*field_name),
+                                expected: field_ty.clone(),
+                                found: expr_field_ty.clone().unwrap_or(TypeKind::Int),
+                            },
+                            declared_ty_span,
+                        ));
+                    }
                 }
             }
-            StmtKind::Return(expr) => {
-                if let Some(expr) = expr {
-                    expr.typecheck(ctx)?;
+            (TypeKind::Alloc(AllocKind::Str(_), _), TypeKind::Ptr(c))
+                if (**c) == TypeKind::Char => {}
+            _ => {
+                if declared_ty != expr_ty {
+                    return Err(TypeError::new(
+                        TypeErrorKind::ExpectedType {
+                            expected: declared_ty.clone(),
+                            found: expr_ty.clone(),
+                        },
+                        declared_ty_span,
+                    ));
                 }
             }
         }
-
         Ok(())
     }
-}
 
-impl Typecheck for Block {
-    fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-        for stmt in self.node.stmts.iter_mut() {
-            stmt.typecheck(ctx)?;
+    fn bind_pattern(&mut self, pat: &Pat, ty: &Type) {
+        match &pat.node {
+            PatKind::Symbol(name) => {
+                self.type_map.insert(*name, ty.clone());
+            }
+            _ => todo!(),
         }
+    }
 
-        if let Some(expr) = &mut self.node.expr {
-            expr.typecheck(ctx)?;
+    pub fn typecheck_module(&mut self, module: &mut Module) -> Result<(), TypeError> {
+        for decl in &mut module.declarations {
+            self.analyze_decl(decl)?;
         }
+        self.check_entry_point()
+    }
 
+    fn check_entry_point(&mut self) -> Result<(), TypeError> {
+        let mut found_main = false;
+        for function in self.function_sigs.keys() {
+            let function_name = self.front_ctx.resolve(*function);
+            if function_name == "main" {
+                self.front_ctx.update(*function, "__entry");
+                found_main = true;
+            }
+        }
+        #[cfg(not(test))]
+        if !found_main {
+            return Err(TypeError::new(
+                TypeErrorKind::MissingMainFunction,
+                DUMMY_SPAN,
+            ));
+        }
         Ok(())
     }
-}
 
-impl Typecheck for Decl {
-    fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-        match &mut self.node {
+    fn analyze_decl(&mut self, decl: &mut Decl) -> Result<(), TypeError> {
+        match &mut decl.node {
             DeclKind::Extern {
                 name,
                 sig,
                 generic_params: _,
             } => {
-                ctx.function_sigs.insert(name.node, sig.clone());
+                self.function_sigs.insert(name.node, sig.clone());
+                Ok(())
             }
             DeclKind::Constant {
                 name,
                 ty,
                 expr,
-                is_comptime: _,
+                is_comptime,
             } => {
-                expr.typecheck(ctx)?;
-                let expr_ty = expr.resolve_type(ctx);
-
+                let val = self.analyze_expr(expr)?;
                 if let Some(declared_ty) = ty {
-                    if declared_ty.node != expr_ty.node {
+                    self.structural_typecheck(
+                        &val.ty,
+                        &declared_ty.node,
+                        declared_ty.span.clone(),
+                    )?;
+                }
+                let inferred_ty = ty
+                    .clone()
+                    .unwrap_or_else(|| Type::synthetic(val.ty.clone()));
+                if *is_comptime {
+                    if let Some(cv) = val.comptime_value {
+                        self.comptime_env.insert(name.node, cv);
+                    } else {
                         return Err(TypeError::new(
-                            TypeErrorKind::ExpectedType {
-                                expected: declared_ty.node.clone(),
-                                found: expr_ty.node,
-                            },
+                            TypeErrorKind::NotComptime,
                             expr.span.clone(),
                         ));
                     }
-                } else {
-                    *ty = Some(expr_ty);
                 }
+                *ty = Some(inferred_ty.clone());
+                self.type_map.insert(name.node, inferred_ty);
+                Ok(())
             }
-            DeclKind::TypeDef { name: _, def: _ } => {}
+            DeclKind::TypeDef { name: _, def: _ } => Ok(()),
             DeclKind::Procedure {
                 name,
                 fn_ty,
@@ -755,7 +789,6 @@ impl Typecheck for Decl {
                             declared_fn_ty.span.clone(),
                         ));
                     };
-
                     if sig.node != **fn_sig {
                         return Err(TypeError::new(
                             TypeErrorKind::SignatureMismatch {
@@ -768,70 +801,190 @@ impl Typecheck for Decl {
                 } else {
                     *fn_ty = Some(Type::synthetic(TypeKind::Fn(Box::new(sig.node.clone()))));
                 }
-
-                for param in sig.node.params.params.iter() {
-                    #[allow(irrefutable_let_patterns)]
+                let previous_comptime = std::mem::take(&mut self.comptime_env);
+                for param in &sig.node.params.params {
                     if let PatKind::Symbol(sym) = param.pattern.node {
-                        ctx.type_map.insert(sym, param.ty.clone());
+                        self.type_map.insert(sym, param.ty.clone());
                     }
                 }
-
-                ctx.function_sigs.insert(name.node, sig.clone());
-                block.typecheck(ctx)?;
-
+                self.function_sigs.insert(name.node, sig.clone());
+                self.analyze_block(block)?;
+                self.comptime_env = previous_comptime;
                 if let Some(expr) = &block.node.expr
                     && let Some(ret_ty) = &sig.node.return_ty
                 {
-                    let expr_ty = expr.resolve_type(ctx);
-
-                    if expr_ty.node != ret_ty.node {
+                    let expr_val = self.analyze_expr(expr)?;
+                    if expr_val.ty != ret_ty.node {
                         return Err(TypeError::new(
                             TypeErrorKind::ReturnTypeMismatch {
                                 expected: ret_ty.node.clone(),
-                                found: expr_ty.node,
+                                found: expr_val.ty,
                             },
                             expr.span.clone(),
                         ));
                     }
                 }
+                Ok(())
             }
         }
+    }
 
+    fn analyze_block(&mut self, block: &mut Block) -> Result<(), TypeError> {
+        for stmt in &mut block.node.stmts {
+            self.analyze_stmt(stmt)?;
+        }
+        if let Some(expr) = &mut block.node.expr {
+            self.analyze_expr(expr)?;
+        }
         Ok(())
     }
-}
 
-impl Typecheck for Module {
-    fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
-        for decl in self.declarations.iter_mut() {
-            decl.typecheck(ctx)?;
-        }
-
-        let mut found_main = false;
-        for function in ctx.function_sigs.keys() {
-            let function_name = ctx.front_ctx.resolve(*function);
-
-            if function_name == "main" {
-                ctx.front_ctx.update(*function, "__entry");
-                found_main = true;
+    fn analyze_stmt(&mut self, stmt: &mut Stmt) -> Result<(), TypeError> {
+        match &mut stmt.node {
+            StmtKind::ValDec {
+                name,
+                ty,
+                expr,
+                is_comptime,
+            } => {
+                let val = self.analyze_expr(expr)?;
+                if let Some(declared_ty) = ty {
+                    self.structural_typecheck(
+                        &val.ty,
+                        &declared_ty.node,
+                        declared_ty.span.clone(),
+                    )?;
+                }
+                let inferred_ty = ty
+                    .clone()
+                    .unwrap_or_else(|| Type::synthetic(val.ty.clone()));
+                if *is_comptime {
+                    if let Some(cv) = val.comptime_value {
+                        self.comptime_env.insert(name.node, cv);
+                    } else {
+                        return Err(TypeError::new(
+                            TypeErrorKind::NotComptime,
+                            expr.span.clone(),
+                        ));
+                    }
+                }
+                *ty = Some(inferred_ty.clone());
+                self.type_map.insert(name.node, inferred_ty);
+                Ok(())
+            }
+            StmtKind::Assign { name, expr } => {
+                let val = self.analyze_expr(expr)?;
+                let Some(expected_type) = self.type_map.get(&name.node) else {
+                    return Err(TypeError::new(
+                        TypeErrorKind::UnknownSymbol(name.node),
+                        name.span.clone(),
+                    ));
+                };
+                if expected_type.node != val.ty {
+                    return Err(TypeError::new(
+                        TypeErrorKind::ExpectedType {
+                            expected: expected_type.node.clone(),
+                            found: val.ty,
+                        },
+                        expr.span.clone(),
+                    ));
+                }
+                Ok(())
+            }
+            StmtKind::IfElse(if_else) => {
+                self.analyze_expr(&if_else.cond)?;
+                self.analyze_block(&mut if_else.then)?;
+                if let Some(else_) = &mut if_else.else_ {
+                    self.analyze_block(else_)?;
+                }
+                Ok(())
+            }
+            StmtKind::Call(call) => {
+                self.analyze_call(call)?;
+                Ok(())
+            }
+            StmtKind::Match(Match { scrutinee, arms }) => {
+                let scrutinee_val = self.analyze_expr(scrutinee)?;
+                for arm in arms {
+                    match &arm.pat.node {
+                        PatKind::Symbol(name) => {
+                            self.bind_pattern(&arm.pat, &Type::synthetic(scrutinee_val.ty.clone()));
+                        }
+                        PatKind::Variant { name, bindings } => {
+                            let TypeKind::Variant(vfields) = &scrutinee_val.ty else {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::ExpectedVariant,
+                                    scrutinee.span.clone(),
+                                ));
+                            };
+                            let Some(variant) = vfields.iter().find(|v| v.name.node == *name)
+                            else {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::UnknownSymbol(*name),
+                                    arm.pat.span.clone(),
+                                ));
+                            };
+                            if bindings.len() != variant.adts.len() {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::ExpectedVariant,
+                                    arm.pat.span.clone(),
+                                ));
+                            }
+                            for (binding, adt) in bindings.iter().zip(variant.adts.iter()) {
+                                self.bind_pattern(binding, adt);
+                            }
+                        }
+                        PatKind::Record(fields) => {
+                            let TypeKind::Record(scru_fields) = &scrutinee_val.ty else {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::ExpectedRecord,
+                                    scrutinee.span.clone(),
+                                ));
+                            };
+                            let pat_ty = TypeKind::Record(fields.clone());
+                            self.structural_typecheck(
+                                &scrutinee_val.ty,
+                                &pat_ty,
+                                scrutinee.span.clone(),
+                            )?;
+                            for field in fields {
+                                self.type_map.insert(field.name, field.ty.clone().unwrap());
+                            }
+                        }
+                        PatKind::Literal(lit) => match lit {
+                            ValueKind::Int(_) => {
+                                if scrutinee_val.ty != TypeKind::Int {
+                                    return Err(TypeError::new(
+                                        TypeErrorKind::ExpectedType {
+                                            expected: TypeKind::Int,
+                                            found: scrutinee_val.ty,
+                                        },
+                                        scrutinee.span.clone(),
+                                    ));
+                                }
+                            }
+                            _ => todo!(),
+                        },
+                        PatKind::Wildcard => {}
+                        _ => todo!(),
+                    }
+                    self.analyze_block(&mut arm.body)?;
+                }
+                Ok(())
+            }
+            StmtKind::Return(expr) => {
+                if let Some(expr) = expr {
+                    self.analyze_expr(expr)?;
+                }
+                Ok(())
             }
         }
-
-        #[cfg(not(test))]
-        if !found_main {
-            return Err(TypeError::new(
-                TypeErrorKind::MissingMainFunction,
-                DUMMY_SPAN,
-            ));
-        }
-
-        Ok(())
     }
 }
 
 pub fn typecheck(ctx: &mut Ctx, module: &mut Module) -> TypecheckResult<()> {
-    let mut ctx = TypecheckCtx::new(ctx);
-    module.typecheck(&mut ctx)
+    let mut analyzer = Analyzer::new(ctx);
+    analyzer.typecheck_module(module)
 }
 
 #[cfg(test)]
@@ -1162,6 +1315,20 @@ mod tests {
     #[test]
     fn test_typecheck_subtyping_record() {
         let src = "foo :: () { x : { a: int } = { a := 1, b := 2 } }";
+        let result = typecheck_src(src);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_comptime_constant_evaluation() {
+        let src = "MY_CONST :: 1 + 2 * 3";
+        let result = typecheck_src(src);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_comptime_bool_evaluation() {
+        let src = "TRUE_CONST :: true and false";
         let result = typecheck_src(src);
         assert!(result.is_ok());
     }

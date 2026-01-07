@@ -72,6 +72,7 @@ pub enum TypeKind {
     Type,
     TypeAlias(Symbol),
     Unit,
+    Variadic,
     Variant(Vec<VariantField>),
 }
 
@@ -185,6 +186,36 @@ pub enum ComptimeValue {
     Type(TypeKind),
     Array(Vec<ComptimeValue>),
     Unit,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedValue {
+    pub ty: TypeKind,
+    pub comptime_value: Option<ComptimeValue>,
+}
+
+impl TypedValue {
+    pub fn runtime(ty: TypeKind) -> Self {
+        Self {
+            ty,
+            comptime_value: None,
+        }
+    }
+
+    pub fn comptime(ty: TypeKind, value: ComptimeValue) -> Self {
+        Self {
+            ty,
+            comptime_value: Some(value),
+        }
+    }
+
+    pub fn is_comptime(&self) -> bool {
+        self.comptime_value.is_some()
+    }
+
+    pub fn unwrap_type(self) -> TypeKind {
+        self.ty
+    }
 }
 
 // possibly make this both a statement and an expression

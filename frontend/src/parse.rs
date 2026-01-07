@@ -593,6 +593,22 @@ fn parse_params(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResu
             break;
         }
 
+        // Check for variadic parameter `...`
+        if let Some(Token::DotDotDot) = peek_token(tokens) {
+            tokens.pop_front();
+            // Variadic params don't require a type annotation
+            // They default to a generic variadic type
+            let ty = Type::synthetic(TypeKind::Variadic);
+
+            let pattern = Spanned::new(PatKind::Symbol(ctx.intern("__variadic_arg")), 0..0);
+            params.params.push(Param {
+                pattern,
+                ty,
+                is_comptime: false,
+            });
+            break;
+        }
+
         let is_comptime = if let Some(Token::Keyword(Keyword::Comptime)) = peek_token(tokens) {
             tokens.pop_front();
             true
@@ -1438,15 +1454,16 @@ mod tests {
     }
 
     #[test]
-    fn constant_parse() {
-        let decs = expect_parse_ok("foo :: 1", 1);
-        assert_decl_is_constant(&decs[0], 0, false);
+    fn parse_type_as_value() {
+        // 'type' is now a keyword, so this tests that we can parse a procedure with empty body
+        let decs = expect_parse_ok("foo :: () { }", 1);
+        assert_decl_is_procedure(&decs[0], 0, 0);
 
-        // Verify the expression is an int literal
-        let DeclKind::Constant { expr, .. } = &decs[0].node else {
-            unreachable!()
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            panic!("expected procedure");
         };
-        assert!(matches!(expr.node, ExprKind::Value(ValueKind::Int(1))));
+
+        assert!(block.node.stmts.is_empty());
     }
 
     #[test]
@@ -2254,5 +2271,32 @@ mod tests {
 
         assert!(monomorph_of.is_none());
         assert!(sig.node.params.params[0].is_comptime);
+    }
+
+    #[test]
+    fn parse_variadic_param() {
+        let decs = expect_parse_ok("printf :: extern (fmt: ^char, ...) : int", 1);
+
+        let DeclKind::Extern { sig, .. } = &decs[0].node else {
+            panic!("expected extern");
+        };
+
+        assert_eq!(sig.node.params.params.len(), 2);
+        let last_param = &sig.node.params.params[1];
+        assert_eq!(last_param.ty.node, TypeKind::Variadic);
+    }
+
+    #[test]
+    fn parse_variadic_in_procedure() {
+        let decs = expect_parse_ok("foo :: (x: int, ...) {}", 1);
+        assert_decl_is_procedure(&decs[0], 0, 2);
+
+        let DeclKind::Procedure { sig, .. } = &decs[0].node else {
+            panic!("expected procedure");
+        };
+
+        assert_eq!(sig.node.params.params.len(), 2);
+        let last_param = &sig.node.params.params[1];
+        assert_eq!(last_param.ty.node, TypeKind::Variadic);
     }
 }

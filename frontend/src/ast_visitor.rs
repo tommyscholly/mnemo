@@ -66,6 +66,7 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
             mir::Ty::Record(field_tys)
         }
         TypeKind::Bool => mir::Ty::Bool,
+        TypeKind::Variadic => mir::Ty::Int,
         tk => panic!("unimplemented type kind {:?}", tk),
     }
 }
@@ -87,6 +88,7 @@ pub struct AstToMIR<'a> {
     current_block: mir::BlockId,
     symbol_table: HashMap<Symbol, mir::LocalId>,
     function_table: HashMap<Symbol, Function>,
+    function_sigs: HashMap<Symbol, crate::ast::Signature>,
     constants: HashMap<Symbol, mir::RValue>,
     phi_functions_to_generate: BTreeMap<mir::LocalId, Vec<mir::LocalId>>,
     variants: HashMap<u8, mir::Ty>,
@@ -104,6 +106,7 @@ impl<'a> AstToMIR<'a> {
             current_block: 0,
             symbol_table: HashMap::new(),
             function_table: HashMap::new(),
+            function_sigs: HashMap::new(),
             constants: HashMap::new(),
             phi_functions_to_generate: BTreeMap::new(),
             variants: HashMap::new(),
@@ -252,6 +255,13 @@ impl<'a> AstToMIR<'a> {
                 local_id
             }
             _ => todo!(),
+        }
+    }
+
+    fn type_of_constant(c: &mir::Constant) -> TypeKind {
+        match c {
+            mir::Constant::Int(_) => TypeKind::Int,
+            mir::Constant::Bool(_) => TypeKind::Bool,
         }
     }
 
@@ -441,15 +451,24 @@ impl AstVisitor for AstToMIR<'_> {
             ExprKind::Call(Call {
                 callee,
                 args,
-                returned_ty,
+                returned_ty: _,
             }) => {
-                assert!(returned_ty.is_some());
-                let returned_ty = returned_ty.unwrap();
+                let returned_ty = match &callee.node {
+                    ExprKind::Value(ValueKind::Ident(name)) => {
+                        let sig = self.function_sigs.get(name);
+                        match sig {
+                            Some(s) => s.node.return_ty.as_ref().map(|t| t.node.clone()),
+                            None => None,
+                        }
+                    }
+                    _ => None,
+                }
+                .unwrap_or(TypeKind::Unit);
 
                 let dest = if self.in_assign_expr {
                     self.get_current_function().locals.len() - 1
                 } else {
-                    self.new_local(&returned_ty.node)
+                    self.new_local(&returned_ty)
                 };
 
                 self.call(*callee, args, Some(dest));
@@ -465,10 +484,18 @@ impl AstVisitor for AstToMIR<'_> {
                 region: _,
             } => {
                 let mut ops = Vec::new();
+                let mut elem_types = Vec::new();
                 for elem in elements {
                     let elem = self.visit_expr(elem);
-                    let op = match elem {
-                        mir::RValue::Use(op) => op,
+                    let (op, ty) = match elem {
+                        mir::RValue::Use(mir::Operand::Copy(place)) => {
+                            let local_ty = self.local_types.get(&place.local).unwrap().clone();
+                            (mir::Operand::Copy(place), local_ty)
+                        }
+                        mir::RValue::Use(mir::Operand::Constant(c)) => {
+                            let local_ty = Self::type_of_constant(&c);
+                            (mir::Operand::Constant(c), local_ty)
+                        }
                         _ => {
                             let elem_local = self.new_local(&TypeKind::Int);
                             self.get_current_block()
@@ -476,10 +503,12 @@ impl AstVisitor for AstToMIR<'_> {
                                 .push(mir::Statement::Assign(elem_local, elem));
 
                             let place = mir::Place::new(elem_local, mir::PlaceKind::Deref);
-                            mir::Operand::Copy(place)
+                            let local_ty = self.local_types.get(&elem_local).unwrap().clone();
+                            (mir::Operand::Copy(place), local_ty)
                         }
                     };
                     ops.push(op);
+                    elem_types.push(ty);
                 }
 
                 match kind {
@@ -497,17 +526,10 @@ impl AstVisitor for AstToMIR<'_> {
                         let ty = ast_type_to_mir_type(&ty);
                         mir::RValue::Alloc(mir::AllocKind::DynArray(ty), ops)
                     }
-                    AllocKind::Record(fields) => {
-                        let tys = fields
-                            .iter()
-                            .map(|f| {
-                                ast_type_to_mir_type(
-                                    &f.ty
-                                        .as_ref()
-                                        .expect("all field types should be resolved by now")
-                                        .node,
-                                )
-                            })
+                    AllocKind::Record(_fields) => {
+                        let tys = elem_types
+                            .into_iter()
+                            .map(|t| ast_type_to_mir_type(&t))
                             .collect();
 
                         mir::RValue::Alloc(mir::AllocKind::Record(tys), ops)
@@ -853,6 +875,9 @@ impl AstVisitor for AstToMIR<'_> {
                 let name_sym = name.node;
                 // TODO: we do not use function types yet
                 let _fn_ty = fn_ty;
+
+                self.function_sigs.insert(name_sym, sig.clone());
+
                 let sig_inner = sig.node;
                 let return_ty = sig_inner
                     .return_ty
@@ -872,6 +897,9 @@ impl AstVisitor for AstToMIR<'_> {
                 self.current_function = Some(name_sym);
 
                 for param in sig_inner.params.params.into_iter() {
+                    if param.ty.node == TypeKind::Variadic {
+                        continue;
+                    }
                     let local_id = self.new_local(&param.ty.node);
 
                     match param.pattern.node {

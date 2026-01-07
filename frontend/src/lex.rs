@@ -92,6 +92,7 @@ pub enum Token {
     Comma,
     Dot,
     DotDot,
+    DotDotDot,
     Eq,
     FatArrow,
     Identifier(Symbol),
@@ -224,7 +225,28 @@ impl<'a, T: Iterator<Item = LexItem>> Lexer<'a, T> {
                 '[' => advance_single_token!(self, Token::LBracket),
                 ']' => advance_single_token!(self, Token::RBracket),
                 ',' => advance_single_token!(self, Token::Comma),
-                '.' => handle_operator!(self, '.', '.', Token::Dot, Token::DotDot),
+                '.' => {
+                    self.chars.next();
+                    self.current += 1;
+
+                    if self.chars.peek() == Some(&'.') {
+                        self.chars.next();
+                        self.current += 1;
+                        if self.chars.peek() == Some(&'.') {
+                            self.chars.next();
+                            self.current += 1;
+                            let span = self.start..self.current;
+                            self.start = self.current;
+                            return Ok(crate::span::Spanned::new(Token::DotDotDot, span));
+                        }
+                        let span = self.start..self.current;
+                        self.start = self.current;
+                        return Ok(crate::span::Spanned::new(Token::DotDot, span));
+                    }
+                    let span = self.start..self.current;
+                    self.start = self.current;
+                    return Ok(crate::span::Spanned::new(Token::Dot, span));
+                }
                 '|' => advance_single_token!(self, Token::Bar),
                 '=' => {
                     self.chars.next();
