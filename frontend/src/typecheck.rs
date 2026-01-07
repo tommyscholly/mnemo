@@ -1332,4 +1332,77 @@ mod tests {
         let result = typecheck_src(src);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_monomorphization_basic_comptime_type() {
+        let src = "identity :: (comptime T: type, x: T): T { return x }";
+        let result = typecheck_src(src);
+        assert!(result.is_ok());
+        let module = result.unwrap();
+
+        let proc = module
+            .declarations
+            .iter()
+            .find(|d| matches!(&d.node, DeclKind::Procedure { .. }))
+            .expect("generic function not found");
+
+        if let DeclKind::Procedure {
+            sig, monomorph_of, ..
+        } = &proc.node
+        {
+            assert!(
+                monomorph_of.is_none(),
+                "Original should not have monomorph_of"
+            );
+            let params = &sig.node.params.params;
+            assert_eq!(params.len(), 2);
+            assert!(params[0].is_comptime);
+            assert!(matches!(params[0].ty.node, TypeKind::Type));
+        }
+    }
+
+    #[test]
+    fn test_monomorphization_multiple_comptime_params() {
+        let src = "first :: (comptime T: type, comptime U: type, a: T, b: U): T { return a }";
+        let result = typecheck_src(src);
+        assert!(result.is_ok());
+        let module = result.unwrap();
+
+        let proc = module
+            .declarations
+            .iter()
+            .find(|d| matches!(&d.node, DeclKind::Procedure { .. }))
+            .expect("generic function not found");
+
+        if let DeclKind::Procedure { sig, .. } = &proc.node {
+            let params = &sig.node.params.params;
+            assert_eq!(params.len(), 4);
+            assert!(params[0].is_comptime);
+            assert!(params[1].is_comptime);
+            assert!(!params[2].is_comptime);
+            assert!(!params[3].is_comptime);
+        }
+    }
+
+    #[test]
+    fn test_monomorphization_mixed_params() {
+        let src = "wrap :: (comptime T: type, x: T, y: int): T { return x }";
+        let result = typecheck_src(src);
+        assert!(result.is_ok());
+        let module = result.unwrap();
+
+        let proc = module
+            .declarations
+            .iter()
+            .find(|d| matches!(&d.node, DeclKind::Procedure { .. }))
+            .expect("generic function not found");
+
+        if let DeclKind::Procedure { sig, .. } = &proc.node {
+            let params = &sig.node.params.params;
+            assert_eq!(params.len(), 3);
+            assert!(params[0].is_comptime);
+            assert!(!params[1].is_comptime);
+            assert!(!params[2].is_comptime);
+        }
+    }
 }
