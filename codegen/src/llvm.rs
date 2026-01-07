@@ -428,7 +428,8 @@ impl<'ctx> Llvm<'ctx> {
                     AllocKind::Str(s) => self
                         .builder
                         .build_global_string_ptr(s, format!("str_{}", s).as_str())?
-                        .as_pointer_value().as_basic_value_enum(),
+                        .as_pointer_value()
+                        .as_basic_value_enum(),
                     a => panic!("unimplemented alloc kind {:?}", a),
                 }
             }

@@ -216,7 +216,7 @@ fn type_check_call(call: &mut Call, ctx: &mut TypecheckCtx) -> TypecheckResult<(
 
     let (callee_signature, span) = resolve_callee_signature(&call.callee, ctx)?;
 
-    let expected_count = callee_signature.node.params.types.len();
+    let expected_count = callee_signature.node.params.params.len();
     let found_count = call.args.len();
     if expected_count != found_count {
         return Err(TypeError::new(
@@ -228,13 +228,13 @@ fn type_check_call(call: &mut Call, ctx: &mut TypecheckCtx) -> TypecheckResult<(
         ));
     }
 
-    for (arg, ty) in call
+    for (arg, param) in call
         .args
         .iter()
-        .zip(callee_signature.node.params.types.iter())
+        .zip(callee_signature.node.params.params.iter())
     {
         let arg_ty = arg.resolve_type(ctx);
-        structural_typecheck(&arg_ty.node, &ty.node, arg_ty.span)?;
+        structural_typecheck(&arg_ty.node, &param.ty.node, arg_ty.span)?;
     }
 
     if let Some(returned_ty) = &call.returned_ty {
@@ -551,7 +551,12 @@ fn structural_typecheck(
 impl Typecheck for Stmt {
     fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
         match &mut self.node {
-            StmtKind::ValDec { name, ty, expr } => {
+            StmtKind::ValDec {
+                name,
+                ty,
+                expr,
+                is_comptime: _,
+            } => {
                 expr.typecheck(ctx)?;
                 let expr_ty = expr.resolve_type(ctx);
 
@@ -589,11 +594,11 @@ impl Typecheck for Stmt {
                     ));
                 }
             }
-            StmtKind::IfElse(IfElse { cond, then, else_ }) => {
+            StmtKind::IfElse(if_else) => {
                 // TODO: check that cond is a bool, right now we only have ints
-                cond.typecheck(ctx)?;
-                then.typecheck(ctx)?;
-                if let Some(else_) = else_ {
+                if_else.cond.typecheck(ctx)?;
+                if_else.then.typecheck(ctx)?;
+                if let Some(else_) = &mut if_else.else_ {
                     else_.typecheck(ctx)?;
                 }
             }
@@ -704,10 +709,19 @@ impl Typecheck for Block {
 impl Typecheck for Decl {
     fn typecheck(&mut self, ctx: &mut TypecheckCtx) -> TypecheckResult<()> {
         match &mut self.node {
-            DeclKind::Extern { name, sig } => {
+            DeclKind::Extern {
+                name,
+                sig,
+                generic_params: _,
+            } => {
                 ctx.function_sigs.insert(name.node, sig.clone());
             }
-            DeclKind::Constant { name, ty, expr } => {
+            DeclKind::Constant {
+                name,
+                ty,
+                expr,
+                is_comptime: _,
+            } => {
                 expr.typecheck(ctx)?;
                 let expr_ty = expr.resolve_type(ctx);
 
@@ -732,6 +746,7 @@ impl Typecheck for Decl {
                 sig,
                 block,
                 constraints: _,
+                monomorph_of: _,
             } => {
                 if let Some(declared_fn_ty) = fn_ty {
                     let TypeKind::Fn(fn_sig) = &declared_fn_ty.node else {
@@ -754,16 +769,10 @@ impl Typecheck for Decl {
                     *fn_ty = Some(Type::synthetic(TypeKind::Fn(Box::new(sig.node.clone()))));
                 }
 
-                for (pat, ty) in sig
-                    .node
-                    .params
-                    .patterns
-                    .iter()
-                    .zip(sig.node.params.types.iter())
-                {
+                for param in sig.node.params.params.iter() {
                     #[allow(irrefutable_let_patterns)]
-                    if let PatKind::Symbol(sym) = pat.node {
-                        ctx.type_map.insert(sym, ty.clone());
+                    if let PatKind::Symbol(sym) = param.pattern.node {
+                        ctx.type_map.insert(sym, param.ty.clone());
                     }
                 }
 

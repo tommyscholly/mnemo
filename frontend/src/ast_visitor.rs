@@ -580,7 +580,12 @@ impl AstVisitor for AstToMIR<'_> {
 
     fn visit_stmt(&mut self, stmt: Stmt) {
         match stmt.node {
-            StmtKind::ValDec { name, ty, expr } => {
+            StmtKind::ValDec {
+                name,
+                ty,
+                expr,
+                is_comptime: _,
+            } => {
                 // all types should be resolved at this point
                 let ty = ty.unwrap();
                 let local_id = self.new_local(&ty.node);
@@ -619,7 +624,8 @@ impl AstVisitor for AstToMIR<'_> {
             }) => {
                 self.call(*callee, args, None);
             }
-            StmtKind::IfElse(IfElse { cond, then, else_ }) => {
+            StmtKind::IfElse(if_else) => {
+                let IfElse { cond, then, else_ } = *if_else;
                 // store the current block id of where the if starts so we can refer to it later
                 let current_block_id = self.current_block;
 
@@ -799,13 +805,17 @@ impl AstVisitor for AstToMIR<'_> {
 
     fn visit_decl(&mut self, decl: Decl) {
         match decl.node {
-            DeclKind::Extern { name, sig } => {
+            DeclKind::Extern {
+                name,
+                sig,
+                generic_params: _,
+            } => {
                 let sig_inner = sig.node;
                 let param_types = sig_inner
                     .params
-                    .types
-                    .into_iter()
-                    .map(|t| ast_type_to_mir_type(&t.node))
+                    .params
+                    .iter()
+                    .map(|p| ast_type_to_mir_type(&p.ty.node))
                     .collect();
 
                 let return_ty = sig_inner
@@ -821,7 +831,12 @@ impl AstVisitor for AstToMIR<'_> {
                 };
                 self.externs.push(extern_);
             }
-            DeclKind::Constant { name, ty: _, expr } => {
+            DeclKind::Constant {
+                name,
+                ty: _,
+                expr,
+                is_comptime: _,
+            } => {
                 let name_sym = name.node;
                 let rvalue = self.visit_expr(expr);
                 self.constants.insert(name_sym, rvalue);
@@ -833,6 +848,7 @@ impl AstVisitor for AstToMIR<'_> {
                 sig,
                 block,
                 constraints: _,
+                monomorph_of: _,
             } => {
                 let name_sym = name.node;
                 // TODO: we do not use function types yet
@@ -846,7 +862,7 @@ impl AstVisitor for AstToMIR<'_> {
                 let function = mir::Function {
                     name: self.ctx.resolve(name_sym).to_string(),
                     blocks: Vec::new(),
-                    parameters: sig_inner.params.patterns.len(),
+                    parameters: sig_inner.params.params.len(),
                     return_ty,
                     locals: Vec::new(),
                 };
@@ -855,15 +871,10 @@ impl AstVisitor for AstToMIR<'_> {
                 self.function_table.insert(name_sym, function);
                 self.current_function = Some(name_sym);
 
-                for (pat, type_) in sig_inner
-                    .params
-                    .patterns
-                    .into_iter()
-                    .zip(sig_inner.params.types.into_iter())
-                {
-                    let local_id = self.new_local(&type_.node);
+                for param in sig_inner.params.params.into_iter() {
+                    let local_id = self.new_local(&param.ty.node);
 
-                    match pat.node {
+                    match param.pattern.node {
                         PatKind::Symbol(pat_name) => {
                             self.symbol_table.insert(pat_name, local_id);
                         }

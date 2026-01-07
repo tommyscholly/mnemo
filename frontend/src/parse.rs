@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 
 use crate::ast::{
     AllocKind, Block, BlockInner, Call, Constraint, Decl, DeclKind, Expr, ExprKind, IfElse, Match,
-    MatchArm, Module, Params, Pat, PatKind, RecordField, Region, Signature, SignatureInner, Stmt,
-    StmtKind, Type, TypeAliasDefinition, TypeKind, ValueKind, VariantField,
+    MatchArm, Module, Param, Params, Pat, PatKind, RecordField, Region, Signature, SignatureInner,
+    Stmt, StmtKind, Type, TypeAliasDefinition, TypeKind, ValueKind, VariantField,
 };
 use crate::ctx::{Ctx, Symbol};
 use crate::lex::{BinOp, Keyword, Token};
@@ -586,24 +586,30 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
 
 fn parse_params(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<(Params, Span)> {
     let start_span = expect_next(tokens, Token::LParen)?;
-    let mut params = Params {
-        patterns: Vec::new(),
-        types: Vec::new(),
-    };
+    let mut params = Params { params: Vec::new() };
 
     while !tokens.is_empty() {
         if let Some(Token::RParen) = peek_token(tokens) {
             break;
         }
 
+        let is_comptime = if let Some(Token::Keyword(Keyword::Comptime)) = peek_token(tokens) {
+            tokens.pop_front();
+            true
+        } else {
+            false
+        };
+
         let name = expect_identifier(tokens)?;
         let ty = parse_type_annot(ctx, tokens)?
             .ok_or_else(|| ParseError::new(ParseErrorKind::ExpectedType, name.span.clone()))?;
 
-        params
-            .patterns
-            .push(Spanned::new(PatKind::Symbol(name.node), name.span));
-        params.types.push(ty);
+        let pattern = Spanned::new(PatKind::Symbol(name.node), name.span);
+        params.params.push(Param {
+            pattern,
+            ty,
+            is_comptime,
+        });
 
         if let Some(Token::Comma) = peek_token(tokens) {
             tokens.pop_front();
@@ -670,6 +676,10 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
             let span = tokens.pop_front().unwrap().span;
 
             Spanned::new(TypeKind::Char, span)
+        }
+        Some(Token::Keyword(Keyword::Type)) => {
+            let span = tokens.pop_front().unwrap().span;
+            Spanned::new(TypeKind::Type, span)
         }
         Some(Token::Identifier(name)) => {
             let name_str = ctx.resolve(*name);
@@ -838,7 +848,7 @@ fn parse_ifelse(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResu
 
     let span = if_span.merge(&end_span);
     Ok(Spanned::new(
-        StmtKind::IfElse(IfElse { cond, then, else_ }),
+        StmtKind::IfElse(Box::new(IfElse { cond, then, else_ })),
         span,
     ))
 }
@@ -1039,7 +1049,15 @@ fn parse_stmt(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
                     expect_next(tokens, Token::Eq)?;
                     let expr = parse_expr(ctx, tokens)?;
                     let span = start_span.merge(&expr.span);
-                    Ok(Spanned::new(StmtKind::ValDec { name, ty, expr }, span))
+                    Ok(Spanned::new(
+                        StmtKind::ValDec {
+                            name,
+                            ty,
+                            expr,
+                            is_comptime: false,
+                        },
+                        span,
+                    ))
                 }
                 Some(Token::Eq) => {
                     expect_next(tokens, Token::Eq)?;
@@ -1133,6 +1151,7 @@ fn parse_procedure(
             sig,
             constraints,
             block,
+            monomorph_of: None,
         },
         span,
     ))
@@ -1322,12 +1341,27 @@ fn parse_decls(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResul
                 expect_next(tokens, Token::Keyword(Keyword::Extern))?;
                 let sig = parse_proc_sig(ctx, tokens)?;
                 let span = name.span.merge(&sig.span);
-                decs.push(Spanned::new(DeclKind::Extern { name, sig }, span));
+                decs.push(Spanned::new(
+                    DeclKind::Extern {
+                        name,
+                        sig,
+                        generic_params: None,
+                    },
+                    span,
+                ));
             }
             Some(_) => {
                 let expr = parse_expr(ctx, tokens)?;
                 let span = start_span.merge(&expr.span);
-                decs.push(Spanned::new(DeclKind::Constant { name, ty, expr }, span));
+                decs.push(Spanned::new(
+                    DeclKind::Constant {
+                        name,
+                        ty,
+                        expr,
+                        is_comptime: false,
+                    },
+                    span,
+                ));
             }
             None => return Err(ParseError::eof()),
         }
@@ -1387,7 +1421,7 @@ mod tests {
             panic!("expected Procedure declaration");
         };
         assert_eq!(name.node, Symbol(expected_name_id));
-        assert_eq!(sig.node.params.patterns.len(), expected_param_count);
+        assert_eq!(sig.node.params.params.len(), expected_param_count);
     }
 
     fn assert_decl_is_typedef(decl: &Decl, expected_name_id: u32) {
@@ -2132,5 +2166,93 @@ mod tests {
         };
 
         assert!(expr.is_none());
+    }
+
+    #[test]
+    fn parse_proc_with_comptime_param() {
+        let decs = expect_parse_ok("foo :: (comptime T: type) {}", 1);
+        assert_decl_is_procedure(&decs[0], 0, 1);
+
+        let DeclKind::Procedure { sig, .. } = &decs[0].node else {
+            panic!("expected procedure");
+        };
+
+        let param = &sig.node.params.params[0];
+        assert!(param.is_comptime);
+        assert!(matches!(param.ty.node, TypeKind::Type));
+    }
+
+    #[test]
+    fn parse_proc_with_multiple_comptime_params() {
+        let decs = expect_parse_ok("foo :: (comptime T: type, comptime N: int) {}", 1);
+        assert_decl_is_procedure(&decs[0], 0, 2);
+
+        let DeclKind::Procedure { sig, .. } = &decs[0].node else {
+            panic!("expected procedure");
+        };
+
+        assert!(sig.node.params.params[0].is_comptime);
+        assert!(matches!(sig.node.params.params[0].ty.node, TypeKind::Type));
+        assert!(sig.node.params.params[1].is_comptime);
+        assert!(matches!(sig.node.params.params[1].ty.node, TypeKind::Int));
+    }
+
+    #[test]
+    fn parse_proc_with_mixed_params() {
+        let decs = expect_parse_ok("foo :: (comptime T: type, x: int) {}", 1);
+        assert_decl_is_procedure(&decs[0], 0, 2);
+
+        let DeclKind::Procedure { sig, .. } = &decs[0].node else {
+            panic!("expected procedure");
+        };
+
+        assert!(sig.node.params.params[0].is_comptime);
+        assert!(!sig.node.params.params[1].is_comptime);
+    }
+
+    #[test]
+    fn parse_type_keyword() {
+        let decs = expect_parse_ok("foo :: () { }", 1);
+        assert_decl_is_procedure(&decs[0], 0, 0);
+
+        let DeclKind::Procedure { block, .. } = &decs[0].node else {
+            panic!("expected procedure");
+        };
+
+        assert!(block.node.stmts.is_empty());
+    }
+
+    #[test]
+    fn parse_extern_with_comptime_param() {
+        let decs = expect_parse_ok("printf :: extern (comptime T: type, x: T)", 1);
+
+        let DeclKind::Extern {
+            sig,
+            generic_params,
+            ..
+        } = &decs[0].node
+        else {
+            panic!("expected extern");
+        };
+
+        assert!(generic_params.is_none());
+        assert_eq!(sig.node.params.params.len(), 2);
+        assert!(sig.node.params.params[0].is_comptime);
+    }
+
+    #[test]
+    fn parse_generic_procedure() {
+        let decs = expect_parse_ok("foo :: (comptime T: type) {}", 1);
+        assert_decl_is_procedure(&decs[0], 0, 1);
+
+        let DeclKind::Procedure {
+            sig, monomorph_of, ..
+        } = &decs[0].node
+        else {
+            panic!("expected procedure");
+        };
+
+        assert!(monomorph_of.is_none());
+        assert!(sig.node.params.params[0].is_comptime);
     }
 }

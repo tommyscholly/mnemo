@@ -44,6 +44,7 @@ pub enum Keyword {
     Allocates,
     Bool,
     Char,
+    Comptime,
     Else,
     Extern,
     False,
@@ -52,6 +53,7 @@ pub enum Keyword {
     Match,
     Return,
     True,
+    Type,
     With,
 }
 
@@ -63,6 +65,7 @@ impl TryFrom<&str> for Keyword {
             "allocates" => Ok(Keyword::Allocates),
             "bool" => Ok(Keyword::Bool),
             "char" => Ok(Keyword::Char),
+            "comptime" => Ok(Keyword::Comptime),
             "else" => Ok(Keyword::Else),
             "extern" => Ok(Keyword::Extern),
             "false" => Ok(Keyword::False),
@@ -71,6 +74,7 @@ impl TryFrom<&str> for Keyword {
             "match" => Ok(Keyword::Match),
             "return" => Ok(Keyword::Return),
             "true" => Ok(Keyword::True),
+            "type" => Ok(Keyword::Type),
             "with" => Ok(Keyword::With),
             _ => Err(()),
         }

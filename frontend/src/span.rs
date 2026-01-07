@@ -1,4 +1,5 @@
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 pub type Span = std::ops::Range<usize>;
 
@@ -6,6 +7,12 @@ pub type Span = std::ops::Range<usize>;
 pub struct Spanned<T> {
     pub node: T,
     pub span: Span,
+}
+
+impl<T: Hash> Hash for Spanned<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.node.hash(state);
+    }
 }
 
 impl<T> Spanned<T> {

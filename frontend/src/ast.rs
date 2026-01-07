@@ -1,9 +1,11 @@
+use std::hash::{Hash, Hasher};
+
 use crate::Span;
 use crate::ctx::Symbol;
 use crate::lex::BinOp;
 use crate::span::{DUMMY_SPAN, Spanned};
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum ValueKind {
     Bool(bool),
     Ident(Symbol),
@@ -13,7 +15,7 @@ pub enum ValueKind {
 #[allow(unused)]
 pub type Value = Spanned<ValueKind>;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct RecordField {
     pub name: Symbol,
     pub ty: Option<Type>,
@@ -26,6 +28,16 @@ pub struct VariantField {
     // NormalEnum :: { One, Two, Foo, Bar }
     // ADTEnum :: { One(int), Two(int, int), Foo(T), Bar(T) }
     pub adts: Vec<Type>,
+}
+
+// requires manual hash cause manual impl of PartialEq
+impl Hash for VariantField {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.node.hash(state);
+        for adt in &self.adts {
+            adt.hash(state);
+        }
+    }
 }
 
 impl PartialEq for VariantField {
@@ -44,16 +56,20 @@ pub enum TypeAliasDefinition {
     Variant(Vec<VariantField>),
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum TypeKind {
     Alloc(AllocKind, Region),
     Bool,
     Char,
+    ComptimeInt,
     Fn(Box<SignatureInner>),
+    Generic(Symbol),
     Int,
     // all ptrs must be qualified with a region (at some point)
     Ptr(Box<TypeKind> /*, Region */),
     Record(Vec<RecordField>),
+    Resolved(Box<TypeKind>),
+    Type,
     TypeAlias(Symbol),
     Unit,
     Variant(Vec<VariantField>),
@@ -71,7 +87,7 @@ impl Type {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum AllocKind {
     Array(Box<TypeKind>, usize),
     DynArray(Box<TypeKind>),
@@ -81,7 +97,7 @@ pub enum AllocKind {
     Variant(Symbol),
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum Region {
     // need to track where a region originates from
     Stack,
@@ -121,7 +137,7 @@ pub enum ExprKind {
 
 pub type Expr = Spanned<ExprKind>;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum PatKind {
     Symbol(Symbol),
     Wildcard,
@@ -150,10 +166,25 @@ pub struct Match {
     pub arms: Vec<MatchArm>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct Params {
-    pub patterns: Vec<Pat>,
-    pub types: Vec<Type>,
+    pub params: Vec<Param>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+pub struct Param {
+    pub pattern: Pat,
+    pub ty: Type,
+    pub is_comptime: bool,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+pub enum ComptimeValue {
+    Int(i128),
+    Bool(bool),
+    Type(TypeKind),
+    Array(Vec<ComptimeValue>),
+    Unit,
 }
 
 // possibly make this both a statement and an expression
@@ -170,14 +201,15 @@ pub enum StmtKind {
         name: Spanned<Symbol>,
         ty: Option<Type>,
         expr: Expr,
+        is_comptime: bool,
     },
     Assign {
         name: Spanned<Symbol>,
         expr: Expr,
     },
-    // a function call with no assignment
+    // a function call that is used in an assignment or declaration
     Call(Call),
-    IfElse(IfElse),
+    IfElse(Box<IfElse>),
     Match(Match),
     Return(Option<Expr>),
 }
@@ -193,7 +225,7 @@ pub struct BlockInner {
 
 pub type Block = Spanned<BlockInner>;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct SignatureInner {
     pub params: Params,
     pub return_ty: Option<Type>,
@@ -207,16 +239,24 @@ pub enum Constraint {
     Allocates(Region),
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+pub struct MonomorphKey {
+    pub base_fn: Symbol,
+    pub comptime_args: Vec<ComptimeValue>,
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DeclKind {
     Extern {
         name: Spanned<Symbol>,
         sig: Signature,
+        generic_params: Option<Vec<Param>>,
     },
     Constant {
         name: Spanned<Symbol>,
         ty: Option<Type>,
         expr: Expr,
+        is_comptime: bool,
     },
     TypeDef {
         name: Spanned<Symbol>,
@@ -229,6 +269,7 @@ pub enum DeclKind {
         sig: Signature,
         constraints: Vec<Constraint>,
         block: Block,
+        monomorph_of: Option<MonomorphKey>,
     },
 }
 
