@@ -123,6 +123,7 @@ impl<'ctx> Llvm<'ctx> {
                 ctx.struct_type(&field_tys, false).as_basic_type_enum()
             }
             mir::Ty::Str => ctx.ptr_type(AddressSpace::default()).as_basic_type_enum(),
+            mir::Ty::Variadic => unreachable!(),
             ty => panic!("unimplemented type {:?}", ty),
         }
     }
@@ -138,19 +139,21 @@ impl<'ctx> Llvm<'ctx> {
         ctx: ContextRef<'ctx>,
         ty: &mir::Ty,
         param_types: Vec<BasicMetadataTypeEnum<'ctx>>,
+        is_variadic: bool,
     ) -> FunctionType<'ctx> {
         match ty {
-            mir::Ty::Int => ctx.i32_type().fn_type(&param_types, false),
-            mir::Ty::Bool => ctx.bool_type().fn_type(&param_types, false),
-            mir::Ty::Char => ctx.i8_type().fn_type(&param_types, false),
-            mir::Ty::Unit => ctx.void_type().fn_type(&param_types, false),
+            mir::Ty::Int => ctx.i32_type().fn_type(&param_types, is_variadic),
+            mir::Ty::Bool => ctx.bool_type().fn_type(&param_types, is_variadic),
+            mir::Ty::Char => ctx.i8_type().fn_type(&param_types, is_variadic),
+            mir::Ty::Unit => ctx.void_type().fn_type(&param_types, is_variadic),
             mir::Ty::Ptr(_) => ctx
                 .ptr_type(AddressSpace::default())
-                .fn_type(&param_types, false),
+                .fn_type(&param_types, is_variadic),
 
             mir::Ty::Array(ty, len) => {
                 let ty = Self::basic_type_to_llvm_basic_type(ctx, ty);
-                ty.array_type(*len as u32).fn_type(&param_types, false)
+                ty.array_type(*len as u32)
+                    .fn_type(&param_types, is_variadic)
             }
             _ => todo!(),
         }
@@ -611,13 +614,21 @@ impl<'ctx> Llvm<'ctx> {
         let mut arg_types = Vec::new();
         let llvm_ctx = self.ctx();
 
+        let mut is_variadic = false;
         for (_i, local) in function.locals.iter().enumerate().take(function.parameters) {
-            arg_types.push(Self::basic_type_to_llvm_basic_metadata_type(
-                llvm_ctx, &local.ty,
-            ));
+            match &local.ty {
+                mir::Ty::Variadic => {
+                    is_variadic = true;
+                }
+                _ => {
+                    arg_types.push(Self::basic_type_to_llvm_basic_metadata_type(
+                        llvm_ctx, &local.ty,
+                    ));
+                }
+            }
         }
 
-        let fn_type = Self::type_to_fn_type(llvm_ctx, &function.return_ty, arg_types);
+        let fn_type = Self::type_to_fn_type(llvm_ctx, &function.return_ty, arg_types, is_variadic);
         let _ = self
             .module
             .add_function(function.name.as_str(), fn_type, Some(Linkage::External));
@@ -659,13 +670,22 @@ impl<'ctx> Llvm<'ctx> {
     }
 
     fn compile_extern(&mut self, extern_: mir::Extern) -> Result<()> {
-        let param_types = extern_
-            .params
-            .iter()
-            .map(|ty| Self::basic_type_to_llvm_basic_metadata_type(self.ctx(), ty))
-            .collect();
+        let mut param_types = Vec::new();
+        let mut is_variadic = false;
 
-        let fn_ty = Self::type_to_fn_type(self.ctx(), &extern_.return_ty, param_types);
+        for ty in extern_.params.iter() {
+            match ty {
+                mir::Ty::Variadic => {
+                    is_variadic = true;
+                }
+                _ => {
+                    let ty = Self::basic_type_to_llvm_basic_metadata_type(self.ctx(), ty);
+                    param_types.push(ty);
+                }
+            }
+        }
+
+        let fn_ty = Self::type_to_fn_type(self.ctx(), &extern_.return_ty, param_types, is_variadic);
         let _ = self.module.add_function(&extern_.name, fn_ty, None);
         Ok(())
     }

@@ -1,5 +1,4 @@
 printf :: extern (fmt: ^char, ...) : int
-puts :: extern (s: ^char) : int
 
 allocation_function :: () : [2]{int} @ R
 // allocates introduces a new region `R` that the function may allocate in
@@ -38,9 +37,9 @@ main :: () {
 
     printf("%d\n", tuple.0)
     if tuple.1 {
-        puts("true")
+        printf("%s\n", "true")
     } else {
-        puts("false")
+        printf("%s\n", "false")
     }
 
     match inline_some with
@@ -65,8 +64,8 @@ main :: () {
 
     printf("%d\n", return_int())
 
-    string := "hello world"
-    puts(string)
+    string := "hello world\n"
+    printf(string)
 
 
     // dyn_array := [] { 1, 2 }

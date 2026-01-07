@@ -19,6 +19,7 @@ pub enum Ty {
     TaggedUnion(Vec<(u8, Ty)>),
     Tuple(Vec<Ty>),
     Unit,
+    Variadic,
 }
 
 impl Ty {
@@ -49,6 +50,7 @@ impl Ty {
                 base_size + padding
             }
             Ty::Record(tys) => tys.iter().map(|t| t.bytes()).sum(),
+            Ty::Variadic => 1,
         }
     }
 
@@ -72,6 +74,8 @@ impl Ty {
                 std::cmp::max(1, max_payload_align)
             }
             Ty::Record(tys) => tys.iter().map(|t| t.align()).max().unwrap_or(1),
+            // TODO: is this correct?
+            Ty::Variadic => 1,
         }
     }
 }
@@ -113,6 +117,7 @@ impl Display for Ty {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
+            Ty::Variadic => write!(f, "..."),
         }
     }
 }

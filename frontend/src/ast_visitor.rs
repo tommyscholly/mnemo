@@ -66,7 +66,7 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
             mir::Ty::Record(field_tys)
         }
         TypeKind::Bool => mir::Ty::Bool,
-        TypeKind::Variadic => mir::Ty::Int,
+        TypeKind::Variadic => mir::Ty::Variadic,
         tk => panic!("unimplemented type kind {:?}", tk),
     }
 }
