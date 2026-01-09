@@ -196,7 +196,7 @@ impl<'a> Analyzer<'a> {
     #[allow(clippy::only_used_in_recursion)]
     fn substitute_type(&self, ty: &TypeKind, subs: &HashMap<Symbol, TypeKind>) -> TypeKind {
         match ty {
-            TypeKind::Generic(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
+            TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
             TypeKind::Ptr(inner) => TypeKind::Ptr(Box::new(self.substitute_type(inner, subs))),
             TypeKind::Alloc(kind, region) => TypeKind::Alloc(kind.clone(), *region),
             TypeKind::Fn(sig) => {
@@ -371,7 +371,7 @@ impl<'a> Analyzer<'a> {
     #[allow(clippy::only_used_in_recursion)]
     fn resolve_generic_type(&self, ty: &TypeKind, subs: &HashMap<Symbol, TypeKind>) -> TypeKind {
         match ty {
-            TypeKind::Generic(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
+            TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
             TypeKind::Ptr(inner) => TypeKind::Ptr(Box::new(self.resolve_generic_type(inner, subs))),
             TypeKind::Alloc(kind, region) => TypeKind::Alloc(kind.clone(), *region),
             TypeKind::Fn(sig) => {
@@ -818,7 +818,7 @@ impl<'a> Analyzer<'a> {
     #[allow(clippy::only_used_in_recursion)]
     fn resolve_type_with_subs(&self, ty: &TypeKind, subs: &HashMap<Symbol, TypeKind>) -> TypeKind {
         match ty {
-            TypeKind::Generic(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
+            TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
             TypeKind::Ptr(inner) => {
                 TypeKind::Ptr(Box::new(self.resolve_type_with_subs(inner, subs)))
             }
@@ -1523,7 +1523,7 @@ mod tests {
 
     #[test]
     fn test_typecheck_variant_type() {
-        let src = "foo :: (): int { x := None }";
+        let src = "foo :: (): int { x := .None }";
         let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
 
@@ -1548,7 +1548,7 @@ mod tests {
 
     #[test]
     fn test_typecheck_variant_type_with_args() {
-        let src = "foo :: (): int { x : Some(int) | None = Some(1) }";
+        let src = "foo :: (): int { x : .Some(int) | .None = .Some(1) }";
         let (ctx, result) = typecheck_src(src);
         assert!(result.is_ok());
 

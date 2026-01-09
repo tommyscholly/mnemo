@@ -1,6 +1,6 @@
 main :: () {
-    x : Some(int) | None = Some(1)
+    x : .Some(int) | .None = .Some(1)
     match x with
-        Some(y) => { }
-      | None    => { }
+        .Some(y) => { }
+      | .None    => { }
 }

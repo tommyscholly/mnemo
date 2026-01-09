@@ -64,13 +64,13 @@ pub enum TypeKind {
     Char,
     ComptimeInt,
     Fn(Box<SignatureInner>),
-    Generic(Symbol),
     Int,
     // all ptrs must be qualified with a region (at some point)
     Ptr(Box<TypeKind> /*, Region */),
     Record(Vec<RecordField>),
     Resolved(Box<TypeKind>),
     Type,
+    // for both type aliases and generic type parameters
     TypeAlias(Symbol),
     Unit,
     Variadic,

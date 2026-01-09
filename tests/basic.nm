@@ -1,17 +1,17 @@
 T :: { field1: int, field2: int }
-Enum :: { X1, X2, X3 }
-ADT :: { X1(int), X2(T), X3(Enum) }
+Enum :: { .X1, .X2, .X3 }
+ADT :: { .X1(int), .X2(T), .X3(Enum) }
 
 foo :: 1
 
 pattern_matching :: (x: ADT) -> int {
     match x {
-        X1(y) => y + 1,
-        X2(y) => y.field1 + y.field2,
-        X3(y) => match y {
-            X1 => 1,
-            X2 => 2,
-            X3 => 3
+        .X1(y) => y + 1,
+        .X2(y) => y.field1 + y.field2,
+        .X3(y) => match y {
+            .X1 => 1,
+            .X2 => 2,
+            .X3 => 3
         }
     }
 }

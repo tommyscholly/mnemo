@@ -26,6 +26,7 @@ pub enum ParseErrorKind {
     ExpectedExpression,
     ExpectedToken(Token),
     UnexpectedEOF,
+    VariantMustStartWithDot,
 }
 
 impl ParseError {
@@ -82,6 +83,10 @@ fn expect_identifier(tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Spanned
 
 fn peek_token(tokens: &VecDeque<SpannedToken>) -> Option<&Token> {
     tokens.front().map(|t| &t.node)
+}
+
+fn peek_nth_token(tokens: &VecDeque<SpannedToken>, n: usize) -> Option<&Token> {
+    tokens.iter().nth(n).map(|t| &t.node)
 }
 
 fn peek_span(tokens: &VecDeque<SpannedToken>) -> Option<Span> {
@@ -359,9 +364,6 @@ fn parse_identifier_expr(
     ident: Spanned<Symbol>,
     tokens: &mut VecDeque<SpannedToken>,
 ) -> ParseResult<Expr> {
-    let ident_name = ctx.resolve(ident.node);
-    let first_char = ident_name.chars().next().unwrap();
-    let is_variant = first_char.is_ascii_uppercase() && !ctx.parsing_region;
     if let Some(Token::LParen) = peek_token(tokens) {
         let lparen_span = tokens.pop_front().unwrap().span;
         let mut args = Vec::new();
@@ -383,44 +385,66 @@ fn parse_identifier_expr(
         let rparen_span = expect_next(tokens, Token::RParen)?;
         let span = ident.span.merge(&lparen_span).merge(&rparen_span);
 
-        if is_variant {
-            // variant
-            return Ok(Spanned::new(
-                ExprKind::Allocation {
-                    kind: AllocKind::Variant(ident.node),
-                    elements: args,
-                    region: None,
-                },
-                span,
-            ));
-        } else {
-            let ident_expr =
-                Spanned::new(ExprKind::Value(ValueKind::Ident(ident.node)), span.clone());
+        let ident_expr = Spanned::new(ExprKind::Value(ValueKind::Ident(ident.node)), span.clone());
 
-            return Ok(Spanned::new(
-                ExprKind::Call(Call {
-                    callee: Box::new(ident_expr),
-                    args,
-                    returned_ty: None,
-                }),
-                span,
-            ));
-        }
+        Ok(Spanned::new(
+            ExprKind::Call(Call {
+                callee: Box::new(ident_expr),
+                args,
+                returned_ty: None,
+            }),
+            span,
+        ))
+    } else {
+        Ok(Spanned::new(
+            ExprKind::Value(ValueKind::Ident(ident.node)),
+            ident.span,
+        ))
     }
+}
 
-    let span = ident.span.clone();
-    if is_variant {
+fn parse_variant_expr(
+    ctx: &mut Ctx,
+    variant_name: Symbol,
+    span: Span,
+    tokens: &mut VecDeque<SpannedToken>,
+) -> ParseResult<Expr> {
+    if let Some(Token::LParen) = peek_token(tokens) {
+        tokens.pop_front();
+        let mut args = Vec::new();
+
+        loop {
+            if let Some(Token::RParen) = peek_token(tokens) {
+                break;
+            }
+
+            args.push(parse_expr(ctx, tokens)?);
+
+            if let Some(Token::Comma) = peek_token(tokens) {
+                tokens.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        let rparen_span = expect_next(tokens, Token::RParen)?;
+        let span = span.merge(&rparen_span);
+
         Ok(Spanned::new(
             ExprKind::Allocation {
-                kind: AllocKind::Variant(ident.node),
-                elements: vec![],
+                kind: AllocKind::Variant(variant_name),
+                elements: args,
                 region: None,
             },
             span,
         ))
     } else {
         Ok(Spanned::new(
-            ExprKind::Value(ValueKind::Ident(ident.node)),
+            ExprKind::Allocation {
+                kind: AllocKind::Variant(variant_name),
+                elements: vec![],
+                region: None,
+            },
             span,
         ))
     }
@@ -468,6 +492,22 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
 
         Token::Identifier(name) => {
             parse_identifier_expr(ctx, Spanned::new(name, token.span), tokens)
+        }
+
+        Token::Dot => {
+            let dot_span = token.span.clone();
+            let Spanned {
+                node: Token::Identifier(variant_name),
+                span: ident_span,
+            } = tokens.pop_front().unwrap()
+            else {
+                return Err(ParseError::new(
+                    ParseErrorKind::ExpectedIdentifier,
+                    dot_span,
+                ));
+            };
+            let span = dot_span.merge(&ident_span);
+            parse_variant_expr(ctx, variant_name, span, tokens)
         }
 
         Token::LBracket => {
@@ -713,68 +753,108 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
             let span = tokens.pop_front().unwrap().span;
             Spanned::new(TypeKind::Type, span)
         }
-        Some(Token::Identifier(name)) => {
-            let name_str = ctx.resolve(*name);
+        Some(Token::Dot) => {
+            // variant type starting with dot
+            let dot_span = tokens.pop_front().unwrap().span;
+            let Spanned {
+                node: Token::Identifier(variant_name),
+                span: ident_span,
+            } = tokens.pop_front().unwrap()
+            else {
+                return Err(ParseError::new(
+                    ParseErrorKind::ExpectedIdentifier,
+                    dot_span,
+                ));
+            };
+            let span = dot_span.merge(&ident_span);
+            let variant_name = Spanned::new(variant_name, span);
 
-            let front_letter = name_str.chars().next().unwrap();
-            let is_uppercase = front_letter.is_ascii_uppercase();
+            let mut fields = Vec::new();
 
-            if is_uppercase {
-                // variant
-                // variants may have bars, such as Some(T) | None
-                let mut fields = Vec::new();
+            if let Some(Token::LParen) = peek_token(tokens) {
+                tokens.pop_front();
+                let mut adts = Vec::new();
                 loop {
-                    let variant_name = expect_identifier(tokens)?;
-                    if let Some(Token::LParen) = peek_token(tokens) {
-                        let _ = tokens.pop_front().unwrap();
-
-                        let mut adts = Vec::new();
-                        loop {
-                            if let Some(Token::RParen) = peek_token(tokens) {
-                                break;
-                            }
-
-                            adts.push(parse_type(ctx, tokens)?.unwrap());
-
-                            if let Some(Token::Comma) = peek_token(tokens) {
-                                tokens.pop_front();
-                            }
-                        }
-
-                        expect_next(tokens, Token::RParen)?;
-                        fields.push(VariantField {
-                            name: variant_name,
-                            adts,
-                        });
-                    } else {
-                        fields.push(VariantField {
-                            name: variant_name,
-                            adts: Vec::new(),
-                        });
-                    }
-
-                    if let Some(Token::Bar) = peek_token(tokens) {
-                        tokens.pop_front();
-                    } else {
+                    if let Some(Token::RParen) = peek_token(tokens) {
                         break;
                     }
+                    adts.push(parse_type(ctx, tokens)?.unwrap());
+                    if let Some(Token::Comma) = peek_token(tokens) {
+                        tokens.pop_front();
+                    }
+                }
+                expect_next(tokens, Token::RParen)?;
+                fields.push(VariantField {
+                    name: variant_name,
+                    adts,
+                });
+            } else {
+                fields.push(VariantField {
+                    name: variant_name,
+                    adts: Vec::new(),
+                });
+            }
+
+            loop {
+                if let Some(Token::Bar) = peek_token(tokens) {
+                    tokens.pop_front();
+                } else {
+                    break;
                 }
 
-                // first has to exist, and last can be first
-                let first_span = fields.first().unwrap().name.span.clone();
-                let span = fields.last().unwrap().name.span.merge(&first_span);
-
-                Spanned::new(TypeKind::Variant(fields), span)
-            } else {
+                expect_next(tokens, Token::Dot)?;
                 let Spanned {
-                    node: Token::Identifier(name),
-                    span,
+                    node: Token::Identifier(variant_name),
+                    span: ident_span,
                 } = tokens.pop_front().unwrap()
                 else {
-                    unreachable!()
+                    return Err(ParseError::new(
+                        ParseErrorKind::ExpectedIdentifier,
+                        dot_span,
+                    ));
                 };
-                Spanned::new(TypeKind::TypeAlias(name), span)
+                let variant_span = dot_span.merge(&ident_span);
+                let variant_name = Spanned::new(variant_name, variant_span);
+
+                if let Some(Token::LParen) = peek_token(tokens) {
+                    tokens.pop_front();
+                    let mut adts = Vec::new();
+                    loop {
+                        if let Some(Token::RParen) = peek_token(tokens) {
+                            break;
+                        }
+                        adts.push(parse_type(ctx, tokens)?.unwrap());
+                        if let Some(Token::Comma) = peek_token(tokens) {
+                            tokens.pop_front();
+                        }
+                    }
+                    expect_next(tokens, Token::RParen)?;
+                    fields.push(VariantField {
+                        name: variant_name,
+                        adts,
+                    });
+                } else {
+                    fields.push(VariantField {
+                        name: variant_name,
+                        adts: Vec::new(),
+                    });
+                }
             }
+
+            let first_span = fields.first().unwrap().name.span.clone();
+            let span = fields.last().unwrap().name.span.merge(&first_span);
+            Spanned::new(TypeKind::Variant(fields), span)
+        }
+        Some(Token::Identifier(_name)) => {
+            // Type alias
+            let Spanned {
+                node: Token::Identifier(name),
+                span,
+            } = tokens.pop_front().unwrap()
+            else {
+                unreachable!()
+            };
+            Spanned::new(TypeKind::TypeAlias(name), span)
         }
         Some(Token::Caret) => {
             let caret_span = tokens.pop_front().unwrap().span;
@@ -889,65 +969,82 @@ fn parse_pat(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<
     let Some(token) = tokens.front() else {
         return Err(ParseError::eof());
     };
+    let token_span = token.span.clone();
+    let token_node = token.node.clone();
 
-    match &token.node {
+    match token_node {
+        Token::Dot => {
+            let dot_span = token_span.clone();
+            tokens.pop_front();
+            let Some(ident_token) = tokens.pop_front() else {
+                return Err(ParseError::new(
+                    ParseErrorKind::ExpectedIdentifier,
+                    dot_span,
+                ));
+            };
+            let Spanned {
+                node: Token::Identifier(variant_name),
+                span: ident_span,
+            } = ident_token
+            else {
+                return Err(ParseError::new(
+                    ParseErrorKind::ExpectedIdentifier,
+                    dot_span,
+                ));
+            };
+            let span = dot_span.merge(&ident_span);
+
+            if let Some(Token::LParen) = peek_token(tokens) {
+                tokens.pop_front();
+                let mut bindings = Vec::new();
+
+                loop {
+                    if let Some(Token::RParen) = peek_token(tokens) {
+                        break;
+                    }
+
+                    bindings.push(parse_pat(ctx, tokens)?);
+
+                    if let Some(Token::Comma) = peek_token(tokens) {
+                        tokens.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+
+                let end_span = expect_next(tokens, Token::RParen)?;
+                let span = span.merge(&end_span);
+
+                Ok(Spanned::new(
+                    PatKind::Variant {
+                        name: variant_name,
+                        bindings,
+                    },
+                    span,
+                ))
+            } else {
+                Ok(Spanned::new(
+                    PatKind::Variant {
+                        name: variant_name,
+                        bindings: vec![],
+                    },
+                    span,
+                ))
+            }
+        }
         Token::Identifier(name) => {
-            let name_str = ctx.resolve(*name);
+            let name_str = ctx.resolve(name);
 
             if name_str == "_" {
                 let span = tokens.pop_front().unwrap().span;
                 return Ok(Spanned::new(PatKind::Wildcard, span));
             }
 
-            let first_char = name_str.chars().next().unwrap();
-            let is_variant = first_char.is_ascii_uppercase();
             let ident = expect_identifier(tokens)?;
-
-            if is_variant {
-                if let Some(Token::LParen) = peek_token(tokens) {
-                    tokens.pop_front();
-                    let mut bindings = Vec::new();
-
-                    loop {
-                        if let Some(Token::RParen) = peek_token(tokens) {
-                            break;
-                        }
-
-                        bindings.push(parse_pat(ctx, tokens)?);
-
-                        if let Some(Token::Comma) = peek_token(tokens) {
-                            tokens.pop_front();
-                        } else {
-                            break;
-                        }
-                    }
-
-                    let end_span = expect_next(tokens, Token::RParen)?;
-                    let span = ident.span.merge(&end_span);
-
-                    Ok(Spanned::new(
-                        PatKind::Variant {
-                            name: ident.node,
-                            bindings,
-                        },
-                        span,
-                    ))
-                } else {
-                    Ok(Spanned::new(
-                        PatKind::Variant {
-                            name: ident.node,
-                            bindings: vec![],
-                        },
-                        ident.span,
-                    ))
-                }
-            } else {
-                Ok(Spanned::new(PatKind::Symbol(ident.node), ident.span))
-            }
+            Ok(Spanned::new(PatKind::Symbol(ident.node), ident.span))
         }
         // TOOD: clean this up to a parse literal function
         Token::Int(i) => {
-            let i = *i;
             let span = tokens.pop_front().unwrap().span;
             Ok(Spanned::new(PatKind::Literal(ValueKind::Int(i)), span))
         }
@@ -1821,8 +1918,8 @@ mod tests {
     fn parse_variant() {
         let decs = expect_parse_ok(
             "foo :: () { 
-                x := None
-                y := Some(1)
+                x := .None
+                y := .Some(1)
             }",
             1,
         );
@@ -2092,8 +2189,8 @@ mod tests {
         let decs = expect_parse_ok(
             "foo :: () { 
             match x with
-                Some(x) => { y := x }
-              | None    => { y := 0 }
+                .Some(x) => { y := x }
+              | .None    => { y := 0 }
             }",
             1,
         );

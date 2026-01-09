@@ -24,8 +24,8 @@ main :: () {
     tuple := (52, true)
 
     inline_record : { a : int, b : int } = { a := untyped_int, b := typed_int }
-    inline_some : Some(int) | None = Some(1)
-    inline_none : Some(int) | None = None
+    inline_some : .Some(int) | .None = .Some(1)
+    inline_none : .Some(int) | .None = .None
 
     print_int := inline_record.a + inline_record.b
 
@@ -47,12 +47,12 @@ main :: () {
     }
 
     match inline_some with
-        Some(x) => { printf("%d\n", x) }
-      | None    => { printf("%d\n", 0) }
+        .Some(x) => { printf("%d\n", x) }
+      | .None    => { printf("%d\n", 0) }
 
     match inline_none with
-        Some(x) => { printf("%d\n", x) }
-      | None    => { printf("%d\n", 0) }
+        .Some(x) => { printf("%d\n", x) }
+      | .None    => { printf("%d\n", 0) }
 
     match typed_int with
         1 => { printf("%d\n", 1) }
