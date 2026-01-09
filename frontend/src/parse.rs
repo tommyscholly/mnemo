@@ -1277,6 +1277,7 @@ fn parse_procedure(
             constraints,
             block,
             monomorph_of: None,
+            is_comptime: false,
         },
         span,
     ))

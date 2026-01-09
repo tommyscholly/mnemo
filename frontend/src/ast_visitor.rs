@@ -385,6 +385,78 @@ impl<'a> AstToMIR<'a> {
         payload_local
     }
 
+    fn register_decl(&mut self, decl: &DeclKind) {
+        match decl {
+            DeclKind::Extern {
+                name,
+                sig,
+                generic_params: _,
+            } => {
+                let sig_inner = &sig.node;
+                let param_types = sig_inner
+                    .params
+                    .params
+                    .iter()
+                    .map(|p| ast_type_to_mir_type(&p.ty.node))
+                    .collect();
+
+                let return_ty = sig_inner
+                    .return_ty
+                    .as_ref()
+                    .map(|t| ast_type_to_mir_type(&t.node))
+                    .unwrap_or(mir::Ty::Unit);
+
+                let name = self.ctx.resolve(name.node).to_string();
+                let extern_ = mir::Extern {
+                    name,
+                    params: param_types,
+                    return_ty: return_ty.clone(),
+                };
+                self.externs.push(extern_);
+            }
+
+            DeclKind::Procedure {
+                name,
+                fn_ty,
+                sig,
+                constraints: _,
+                block: _,
+                monomorph_of: _,
+                is_comptime,
+            } => {
+                if *is_comptime {
+                    return;
+                }
+
+                let name_sym = name.node;
+                // TODO: we do not use function types yet
+                let _fn_ty = fn_ty;
+
+                self.function_sigs.insert(name_sym, sig.clone());
+
+                println!("name: {}", self.ctx.resolve(name_sym));
+
+                let sig_inner = &sig.node;
+                let return_ty = sig_inner
+                    .return_ty
+                    .as_ref()
+                    .map(|t| ast_type_to_mir_type(&t.node))
+                    .unwrap_or(mir::Ty::Unit);
+
+                let function = mir::Function {
+                    name: self.ctx.resolve(name_sym).to_string(),
+                    blocks: Vec::new(),
+                    parameters: sig_inner.params.params.len(),
+                    return_ty,
+                    locals: Vec::new(),
+                };
+
+                self.function_table.insert(name_sym, function);
+            }
+            _ => {}
+        }
+    }
+
     pub fn produce_module(mut self) -> mir::Module {
         let function_table = std::mem::take(&mut self.function_table);
         let functions = function_table.into_values().collect();
@@ -832,32 +904,7 @@ impl AstVisitor for AstToMIR<'_> {
 
     fn visit_decl(&mut self, decl: Decl) {
         match decl.node {
-            DeclKind::Extern {
-                name,
-                sig,
-                generic_params: _,
-            } => {
-                let sig_inner = sig.node;
-                let param_types = sig_inner
-                    .params
-                    .params
-                    .iter()
-                    .map(|p| ast_type_to_mir_type(&p.ty.node))
-                    .collect();
-
-                let return_ty = sig_inner
-                    .return_ty
-                    .map(|t| ast_type_to_mir_type(&t.node))
-                    .unwrap_or(mir::Ty::Unit);
-
-                let name = self.ctx.resolve(name.node).to_string();
-                let extern_ = mir::Extern {
-                    name,
-                    params: param_types,
-                    return_ty,
-                };
-                self.externs.push(extern_);
-            }
+            DeclKind::Extern { .. } => {}
             DeclKind::Constant {
                 name,
                 ty: _,
@@ -871,35 +918,22 @@ impl AstVisitor for AstToMIR<'_> {
             DeclKind::TypeDef { name: _, def: _ } => todo!(),
             DeclKind::Procedure {
                 name,
-                fn_ty,
+                fn_ty: _,
                 sig,
                 block,
                 constraints: _,
                 monomorph_of: _,
+                is_comptime,
             } => {
+                if is_comptime {
+                    return;
+                }
+
                 let name_sym = name.node;
-                // TODO: we do not use function types yet
-                let _fn_ty = fn_ty;
-
-                self.function_sigs.insert(name_sym, sig.clone());
-
-                let sig_inner = sig.node;
-                let return_ty = sig_inner
-                    .return_ty
-                    .map(|t| ast_type_to_mir_type(&t.node))
-                    .unwrap_or(mir::Ty::Unit);
-
-                let function = mir::Function {
-                    name: self.ctx.resolve(name_sym).to_string(),
-                    blocks: Vec::new(),
-                    parameters: sig_inner.params.params.len(),
-                    return_ty,
-                    locals: Vec::new(),
-                };
 
                 self.local_types.clear();
-                self.function_table.insert(name_sym, function);
                 self.current_function = Some(name_sym);
+                let sig_inner = sig.node;
 
                 for param in sig_inner.params.params.into_iter() {
                     if param.ty.node == TypeKind::Variadic {
@@ -923,6 +957,10 @@ impl AstVisitor for AstToMIR<'_> {
     }
 
     fn visit_module(&mut self, module: Module) {
+        for decl in &module.declarations {
+            self.register_decl(&decl.node);
+        }
+
         for decl in module.declarations {
             self.visit_decl(decl);
         }

@@ -508,6 +508,8 @@ impl<'ctx> Llvm<'ctx> {
         match terminator {
             mir::Terminator::Return(local_id) => match local_id {
                 Some(local_id) => {
+                    println!("local_id: {:?}", local_id);
+                    println!("fn name {:?}", llvm_fn.get_name());
                     let local = self.function_locals.get(&local_id).unwrap();
                     let val = self
                         .builder
@@ -645,6 +647,22 @@ impl<'ctx> Llvm<'ctx> {
             .ctx()
             .append_basic_block(llvm_fn, format!("{}_entry", function.name).as_str());
         self.builder.position_at_end(entry_block);
+
+        for (param_idx, param_local) in function.locals.iter().take(function.parameters).enumerate()
+        {
+            let local_ty = Self::basic_type_to_llvm_basic_type(llvm_ctx, &param_local.ty);
+            let local_alloca = self
+                .builder
+                .build_alloca(local_ty, format!("param{}", param_local.id).as_str())?;
+
+            let param = llvm_fn.get_nth_param(param_idx as u32).unwrap();
+
+            self.builder.build_store(local_alloca, param).unwrap();
+
+            let local_info =
+                FunctionLocalInfo::new(local_ty, param_local.ty.clone(), local_alloca, entry_block);
+            self.function_locals.insert(param_local.id, local_info);
+        }
 
         for local in function.locals.iter().skip(function.parameters) {
             let local_ty = Self::basic_type_to_llvm_basic_type(llvm_ctx, &local.ty);

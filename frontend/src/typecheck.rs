@@ -442,10 +442,16 @@ impl<'a> Analyzer<'a> {
                     .params
                     .params
                     .iter()
-                    .map(|p| Param {
-                        pattern: p.pattern.clone(),
-                        ty: Type::synthetic(self.resolve_generic_type(&p.ty.node, &subs)),
-                        is_comptime: false,
+                    .filter_map(|p| {
+                        if p.is_comptime {
+                            None
+                        } else {
+                            Some(Param {
+                                pattern: p.pattern.clone(),
+                                ty: Type::synthetic(self.resolve_generic_type(&p.ty.node, &subs)),
+                                is_comptime: false,
+                            })
+                        }
                     })
                     .collect(),
             },
@@ -468,21 +474,28 @@ impl<'a> Analyzer<'a> {
             parts.join("_")
         });
 
-        let Some(original_decl) = self.module_decls.get(&base_fn) else {
+        let Some(original_decl) = self.module_decls.get_mut(&base_fn) else {
             return Err(TypeError::new(
                 TypeErrorKind::UnknownSymbol(base_fn),
                 DUMMY_SPAN,
             ));
         };
 
-        let DeclKind::Procedure { block, .. } = original_decl else {
+        let DeclKind::Procedure {
+            block, is_comptime, ..
+        } = original_decl
+        else {
             return Err(TypeError::new(
                 TypeErrorKind::GenericInstantiation("not a procedure".to_string()),
                 DUMMY_SPAN,
             ));
         };
 
-        let monomorphized_block = self.substitute_block(block, &subs);
+        *is_comptime = true;
+        // TOOD: remove this clone, its so we drob the mut borrow
+        let block = block.clone();
+
+        let monomorphized_block = self.substitute_block(&block, &subs);
 
         let monomorphized_decl = DeclKind::Procedure {
             name: Spanned::new(self.front_ctx.intern(&new_name), DUMMY_SPAN),
@@ -493,6 +506,7 @@ impl<'a> Analyzer<'a> {
             constraints: vec![],
             block: monomorphized_block,
             monomorph_of: Some(key.clone()),
+            is_comptime: false,
         };
 
         self.monomorph_cache
@@ -715,7 +729,8 @@ impl<'a> Analyzer<'a> {
         }
 
         let mut comptime_args = Vec::new();
-        for (arg_val, param) in arg_vals.iter().zip(params.iter()) {
+        let mut non_comptime_args = Vec::new();
+        for (i, (arg_val, param)) in arg_vals.iter().zip(params.iter()).enumerate() {
             if param.is_comptime {
                 if let Some(cv) = &arg_val.comptime_value {
                     comptime_args.push(cv.clone());
@@ -725,7 +740,9 @@ impl<'a> Analyzer<'a> {
                         call.callee.span.clone(),
                     ));
                 }
-            }
+            } else {
+                non_comptime_args.push(call.args[i].clone());
+            };
         }
 
         let mut subs = HashMap::new();
@@ -755,13 +772,16 @@ impl<'a> Analyzer<'a> {
             && let ExprKind::Value(ValueKind::Ident(fn_name)) = &call.callee.node
         {
             let monomorphized_decl = self.monomorphize(*fn_name, comptime_args)?;
-            if let DeclKind::Procedure { sig, .. } = monomorphized_decl.node {
+            if let DeclKind::Procedure { name, sig, .. } = monomorphized_decl.node {
                 return_ty = sig
                     .node
                     .return_ty
                     .as_ref()
                     .map(|t| t.node.clone())
                     .unwrap_or(TypeKind::Unit);
+
+                call.callee.node = ExprKind::Value(ValueKind::Ident(name.node));
+                call.args = non_comptime_args;
             }
         }
 
@@ -932,6 +952,21 @@ impl<'a> Analyzer<'a> {
         for decl in &mut module.declarations {
             self.analyze_decl(decl)?;
         }
+
+        for decl in &mut module.declarations {
+            if let DeclKind::Procedure {
+                name, is_comptime, ..
+            } = &mut decl.node
+                && let Some(proc) = self.module_decls.get(&name.node)
+                && let DeclKind::Procedure {
+                    is_comptime: comptime,
+                    ..
+                } = &proc
+            {
+                *is_comptime = *comptime;
+            }
+        }
+
         module.declarations.extend(self.pending_monomorphs.clone());
         self.check_entry_point()
     }
@@ -1004,6 +1039,7 @@ impl<'a> Analyzer<'a> {
                 block,
                 constraints: _,
                 monomorph_of: _,
+                is_comptime: _,
             } => {
                 if let Some(declared_fn_ty) = fn_ty {
                     let TypeKind::Fn(fn_sig) = &declared_fn_ty.node else {

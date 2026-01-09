@@ -302,6 +302,8 @@ pub enum DeclKind {
         constraints: Vec<Constraint>,
         block: Block,
         monomorph_of: Option<MonomorphKey>,
+        // filled in during typechecking, to skip over during lowering to MIR
+        is_comptime: bool,
     },
 }
 

@@ -72,6 +72,10 @@ main :: () {
     printf(string)
 
     val := identity(int, 1)
+    printf("%d\n", val)
+
+    val2 := identity(bool, true)
+    printf("%d\n", val2)
 
     // dyn_array := [] { 1, 2 }
 }
