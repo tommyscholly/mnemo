@@ -85,10 +85,6 @@ fn peek_token(tokens: &VecDeque<SpannedToken>) -> Option<&Token> {
     tokens.front().map(|t| &t.node)
 }
 
-fn peek_nth_token(tokens: &VecDeque<SpannedToken>, n: usize) -> Option<&Token> {
-    tokens.iter().nth(n).map(|t| &t.node)
-}
-
 fn peek_span(tokens: &VecDeque<SpannedToken>) -> Option<Span> {
     tokens.front().map(|t| t.span.clone())
 }

@@ -502,8 +502,8 @@ impl<'a> Analyzer<'a> {
         Ok(decl)
     }
 
-    pub fn analyze_expr(&mut self, expr: &Expr) -> Result<TypedValue, TypeError> {
-        match &expr.node {
+    pub fn analyze_expr(&mut self, expr: &mut Expr) -> Result<TypedValue, TypeError> {
+        match &mut expr.node {
             ExprKind::Value(v) => match v {
                 ValueKind::Int(n) => Ok(TypedValue::comptime(
                     TypeKind::Int,
@@ -564,16 +564,19 @@ impl<'a> Analyzer<'a> {
                 region,
                 elements,
             } => {
-                for e in elements {
-                    self.analyze_expr(e)?;
+                let mut elem_vals = Vec::new();
+                for elem in elements {
+                    elem_vals.push(self.analyze_expr(elem)?);
                 }
+
                 let region_handle = region.unwrap_or(Region::Stack);
                 let resolved_kind = match kind {
                     AllocKind::Tuple(tys) => {
                         let mut types = Vec::new();
-                        for elem in elements {
-                            types.push(self.analyze_expr(elem)?.unwrap_type());
+                        for elem in elem_vals.into_iter() {
+                            types.push(elem.unwrap_type());
                         }
+
                         if !tys.is_empty() && tys.len() != types.len() && *tys != types {
                             panic!("expected tuple types to be equal");
                         }
@@ -581,8 +584,7 @@ impl<'a> Analyzer<'a> {
                     }
                     AllocKind::Variant(variant_name) => {
                         let mut adts = Vec::new();
-                        for e in elements {
-                            let val = self.analyze_expr(e)?;
+                        for val in elem_vals.into_iter() {
                             adts.push(Type::synthetic(val.unwrap_type()));
                         }
                         return Ok(TypedValue::runtime(TypeKind::Variant(vec![VariantField {
@@ -592,48 +594,7 @@ impl<'a> Analyzer<'a> {
                     }
                     AllocKind::Record(fields) => {
                         let mut filled_fields = Vec::new();
-                        for (field, elem) in fields.iter().zip(elements.iter()) {
-                            let elem_val = self.analyze_expr(elem)?;
-                            let elem_ty = Type::synthetic(elem_val.ty);
-                            filled_fields.push(RecordField {
-                                name: field.name,
-                                ty: Some(elem_ty.clone()),
-                            });
-                        }
-                        return Ok(TypedValue::runtime(TypeKind::Record(filled_fields)));
-                    }
-                    _ => kind.clone(),
-                };
-                for e in elements {
-                    self.analyze_expr(e)?;
-                }
-                let region_handle = region.unwrap_or(Region::Stack);
-                let resolved_kind = match kind {
-                    AllocKind::Tuple(tys) => {
-                        let mut types = Vec::new();
-                        for elem in elements {
-                            types.push(self.analyze_expr(elem)?.unwrap_type());
-                        }
-                        if !tys.is_empty() && tys.len() != types.len() && *tys != types {
-                            panic!("expected tuple types to be equal");
-                        }
-                        AllocKind::Tuple(types)
-                    }
-                    AllocKind::Variant(variant_name) => {
-                        let mut adts = Vec::new();
-                        for e in elements {
-                            let val = self.analyze_expr(e)?;
-                            adts.push(Type::synthetic(val.unwrap_type()));
-                        }
-                        return Ok(TypedValue::runtime(TypeKind::Variant(vec![VariantField {
-                            name: Spanned::default(*variant_name),
-                            adts,
-                        }])));
-                    }
-                    AllocKind::Record(fields) => {
-                        let mut filled_fields = Vec::new();
-                        for (field, elem) in fields.iter().zip(elements.iter()) {
-                            let elem_val = self.analyze_expr(elem)?;
+                        for (field, elem_val) in fields.iter_mut().zip(elem_vals.into_iter()) {
                             let elem_ty = Type::synthetic(elem_val.ty);
                             filled_fields.push(RecordField {
                                 name: field.name,
@@ -710,10 +671,10 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn analyze_call(&mut self, call: &Call) -> Result<TypedValue, TypeError> {
+    fn analyze_call(&mut self, call: &mut Call) -> Result<TypedValue, TypeError> {
         let arg_vals: Vec<_> = call
             .args
-            .iter()
+            .iter_mut()
             .map(|arg| self.analyze_expr(arg))
             .collect::<Result<_, _>>()?;
 
@@ -773,9 +734,9 @@ impl<'a> Analyzer<'a> {
                 let ty = match cv {
                     ComptimeValue::Int(_) => TypeKind::Int,
                     ComptimeValue::Bool(_) => TypeKind::Bool,
-                    ComptimeValue::Type(_) => TypeKind::Type,
+                    ComptimeValue::Type(tk) => tk.clone(),
                     ComptimeValue::Array(_) => {
-                        TypeKind::Alloc(AllocKind::DynArray(Box::new(TypeKind::Int)), Region::Stack)
+                        todo!()
                     }
                     ComptimeValue::Unit => TypeKind::Unit,
                 };
@@ -804,10 +765,14 @@ impl<'a> Analyzer<'a> {
             }
         }
 
+        // println!("subs: {:?}", subs);
         for (i, (arg, param)) in call.args.iter().zip(params.iter()).enumerate() {
             let arg_val = &arg_vals[i];
+            // println!("arg_val: {:?}", arg_val);
+            // println!("param: {:?}", param);
             if param.ty.node != TypeKind::Variadic {
                 let resolved_param_ty = self.resolve_type_with_subs(&param.ty.node, &subs);
+                // println!("resolved_param_ty: {:?}", resolved_param_ty);
                 self.structural_typecheck(&arg_val.ty, &resolved_param_ty, arg.span.clone())?;
             }
         }
@@ -1068,7 +1033,7 @@ impl<'a> Analyzer<'a> {
                 self.function_sigs.insert(name.node, sig.clone());
                 self.analyze_block(block)?;
                 self.comptime_env = previous_comptime;
-                if let Some(expr) = &block.node.expr
+                if let Some(expr) = &mut block.node.expr
                     && let Some(ret_ty) = &sig.node.return_ty
                 {
                     let expr_val = self.analyze_expr(expr)?;
@@ -1150,7 +1115,7 @@ impl<'a> Analyzer<'a> {
                 Ok(())
             }
             StmtKind::IfElse(if_else) => {
-                self.analyze_expr(&if_else.cond)?;
+                self.analyze_expr(&mut if_else.cond)?;
                 self.analyze_block(&mut if_else.then)?;
                 if let Some(else_) = &mut if_else.else_ {
                     self.analyze_block(else_)?;
