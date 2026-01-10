@@ -785,14 +785,10 @@ impl<'a> Analyzer<'a> {
             }
         }
 
-        // println!("subs: {:?}", subs);
         for (i, (arg, param)) in call.args.iter().zip(params.iter()).enumerate() {
             let arg_val = &arg_vals[i];
-            // println!("arg_val: {:?}", arg_val);
-            // println!("param: {:?}", param);
             if param.ty.node != TypeKind::Variadic {
                 let resolved_param_ty = self.resolve_type_with_subs(&param.ty.node, &subs);
-                // println!("resolved_param_ty: {:?}", resolved_param_ty);
                 self.structural_typecheck(&arg_val.ty, &resolved_param_ty, arg.span.clone())?;
             }
         }

@@ -508,8 +508,6 @@ impl<'ctx> Llvm<'ctx> {
         match terminator {
             mir::Terminator::Return(local_id) => match local_id {
                 Some(local_id) => {
-                    println!("local_id: {:?}", local_id);
-                    println!("fn name {:?}", llvm_fn.get_name());
                     let local = self.function_locals.get(&local_id).unwrap();
                     let val = self
                         .builder

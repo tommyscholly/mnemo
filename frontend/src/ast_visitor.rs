@@ -434,8 +434,6 @@ impl<'a> AstToMIR<'a> {
 
                 self.function_sigs.insert(name_sym, sig.clone());
 
-                println!("name: {}", self.ctx.resolve(name_sym));
-
                 let sig_inner = &sig.node;
                 let return_ty = sig_inner
                     .return_ty

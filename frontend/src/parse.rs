@@ -114,7 +114,6 @@ fn parse_potential_region_alloc(
                     }
                 }
                 _ => {
-                    eprintln!("region expr: {:#?}", region_expr.node);
                     return Err(ParseError::new(
                         ParseErrorKind::ExpectedRegion,
                         region_expr.span,
@@ -1932,7 +1931,6 @@ mod tests {
             unreachable!()
         };
 
-        eprintln!("{:#?}", expr1);
         assert!(matches!(
             &expr1.node,
             ExprKind::Allocation {
