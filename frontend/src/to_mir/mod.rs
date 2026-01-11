@@ -1,3 +1,5 @@
+mod tests;
+
 use crate::Spanned;
 use crate::ast::*;
 use crate::ctx::{Ctx, Symbol};
@@ -8,8 +10,6 @@ use crate::AstVisitor;
 use std::collections::{BTreeMap, HashMap};
 #[derive(Debug)]
 pub struct AstToMIR<'a> {
-    // TODO: we will use this later for symbol lookups and other things
-    #[allow(unused)]
     ctx: &'a Ctx,
     current_function: Option<Symbol>,
     current_block: mir::BlockId,
@@ -351,9 +351,12 @@ impl<'a> AstToMIR<'a> {
                 monomorph_of: _,
                 is_comptime,
             } => {
+                let name_ = self.ctx.resolve(name.node).to_string();
                 if *is_comptime {
+                    println!("skipping {name_}");
                     return;
                 }
+                println!("compiling {name_}");
 
                 let name_sym = name.node;
                 // TODO: we do not use function types yet
@@ -362,6 +365,7 @@ impl<'a> AstToMIR<'a> {
                 self.function_sigs.insert(name_sym, sig.clone());
 
                 let sig_inner = &sig.node;
+                eprintln!("\t{sig_inner:?}");
                 let return_ty = sig_inner
                     .return_ty
                     .as_ref()

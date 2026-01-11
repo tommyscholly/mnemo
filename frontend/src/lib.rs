@@ -1,5 +1,5 @@
 mod ast;
-mod ast_to_mir;
+mod to_mir;
 mod ast_visitor;
 mod ctx;
 mod lex;
@@ -14,7 +14,7 @@ pub use lex::BinOp;
 pub use mir::{Function, visualize};
 pub use span::{Diagnostic, SourceMap, Span, SpanExt, Spanned};
 
-use ast_to_mir::AstToMIR;
+use to_mir::AstToMIR;
 use ast_visitor::AstVisitor;
 
 use std::collections::VecDeque;

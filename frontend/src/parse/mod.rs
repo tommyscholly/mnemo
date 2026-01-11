@@ -517,11 +517,16 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
             let start_span = token.span;
             let next_tok = tokens.pop_front().ok_or_else(ParseError::eof)?;
 
-            let alloc_kind = match next_tok.node {
+            let mut alloc_kind = match next_tok.node {
                 Token::RBracket => AllocKind::DynArray(TypeKind::Int.into()),
                 Token::Int(i) => {
                     expect_next(tokens, Token::RBracket)?;
-                    AllocKind::Array(TypeKind::Int.into(), ComptimeValue::Int(i as i128).into())
+                    AllocKind::Array(TypeKind::Any.into(), ComptimeValue::Int(i as i128).into())
+                }
+                Token::Identifier(name) => {
+                    expect_next(tokens, Token::RBracket)?;
+                    // assuming comptime identifier that will be resolved during typechecking
+                    AllocKind::Array(TypeKind::Any.into(), ComptimeValue::Ident(name).into())
                 }
                 _ => {
                     return Err(ParseError::new(
@@ -531,7 +536,17 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
                 }
             };
 
+            let Some(array_ty) = parse_type(ctx, tokens)? else {
+                return Err(ParseError::new(
+                    ParseErrorKind::ExpectedType,
+                    peek_span(tokens).unwrap_or(start_span),
+                ));
+            };
+
+            alloc_kind.fill_type(array_ty.node);
+
             expect_next(tokens, Token::LBrace)?;
+
             let mut exprs = Vec::new();
 
             loop {
@@ -891,25 +906,25 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
             let start_span = tokens.pop_front().unwrap().span;
             let next_tok = tokens.pop_front().ok_or_else(ParseError::eof)?;
 
+            expect_next(tokens, Token::RBracket)?;
+
+            let arr_ty = match parse_type(ctx, tokens)? {
+                Some(ty) => ty,
+                None => {
+                    return Err(ParseError::new(
+                        ParseErrorKind::ExpectedType,
+                        peek_span(tokens).unwrap_or(start_span),
+                    ));
+                }
+            };
+
             let alloc_kind = match next_tok.node {
                 Token::Int(i) => {
-                    expect_next(tokens, Token::RBracket)?;
-
-                    expect_next(tokens, Token::LBrace)?;
-                    let arr_ty = match parse_type(ctx, tokens)? {
-                        Some(ty) => ty.node,
-                        None => {
-                            return Err(ParseError::new(
-                                ParseErrorKind::ExpectedType,
-                                peek_span(tokens).unwrap_or(start_span),
-                            ));
-                        }
-                    };
-                    AllocKind::Array(arr_ty.into(), ComptimeValue::Int(i as i128).into())
+                    AllocKind::Array(arr_ty.node.into(), ComptimeValue::Int(i as i128).into())
                 }
                 Token::Identifier(name) => {
                     // assuming comptime identifier that will be resolved during typechecking
-                    AllocKind::Array(TypeKind::Int.into(), ComptimeValue::Ident(name).into())
+                    AllocKind::Array(arr_ty.node.into(), ComptimeValue::Ident(name).into())
                 }
                 _ => {
                     return Err(ParseError::new(
@@ -919,8 +934,7 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
                 }
             };
 
-            let end_span = expect_next(tokens, Token::RBrace)?;
-            let span = start_span.merge(&end_span);
+            let span = start_span.merge(&arr_ty.span);
 
             let region = check_region_type_annotation(ctx, tokens)?;
             Spanned::new(

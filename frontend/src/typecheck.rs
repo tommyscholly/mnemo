@@ -43,9 +43,14 @@ impl Diagnostic for TypeError {
 
 #[derive(Debug)]
 pub enum TypeErrorKind {
+    ArraySizeMismatch {
+        expected: ComptimeValue,
+        found: ComptimeValue,
+    },
     MissingMainFunction,
     ExpectedArrayIndex,
     ExpectedVariant,
+    TypeAnnotationRequired,
     ExpectedType {
         expected: TypeKind,
         found: TypeKind,
@@ -91,6 +96,12 @@ pub enum TypeErrorKind {
 
 pub type TypecheckResult<T> = Result<T, TypeError>;
 
+#[derive(Debug, Clone)]
+struct ComptimeArg {
+    ty: TypeKind,
+    cv: ComptimeValue,
+}
+
 pub struct Analyzer<'a> {
     pub front_ctx: &'a mut Ctx,
     pub type_map: HashMap<Symbol, Type>,
@@ -135,7 +146,7 @@ impl<'a> Analyzer<'a> {
                 self.type_of_comptime_value(self.comptime_env.get(id).unwrap())
             }
             ComptimeValue::Int(_) => TypeKind::Int,
-            ComptimeValue::Type(tk) => TypeKind::Type,
+            ComptimeValue::Type(tk) => tk.clone(),
             ComptimeValue::Region(_) => TypeKind::Region,
         }
     }
@@ -208,11 +219,13 @@ impl<'a> Analyzer<'a> {
     }
 
     #[allow(clippy::only_used_in_recursion)]
-    fn substitute_type(&self, ty: &TypeKind, subs: &HashMap<Symbol, TypeKind>) -> TypeKind {
+    fn substitute_type(&self, ty: &TypeKind, subs: &HashMap<Symbol, ComptimeArg>) -> TypeKind {
         match ty {
-            TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
+            TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap().ty,
             TypeKind::Ptr(inner) => TypeKind::Ptr(Box::new(self.substitute_type(inner, subs))),
-            TypeKind::Alloc(kind, region) => TypeKind::Alloc(kind.clone(), *region),
+            TypeKind::Alloc(kind, region) => {
+                TypeKind::Alloc(self.substitute_alloc_kind(kind, subs), *region)
+            }
             TypeKind::Fn(sig) => {
                 let new_params: Vec<_> = sig
                     .params
@@ -237,8 +250,31 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    fn substitute_alloc_kind(
+        &self,
+        kind: &AllocKind,
+        subs: &HashMap<Symbol, ComptimeArg>,
+    ) -> AllocKind {
+        match kind {
+            AllocKind::Array(ty, size) => AllocKind::Array(
+                self.substitute_type(ty, subs).into(),
+                match **size {
+                    ComptimeValue::Int(i) => size.clone(),
+                    ComptimeValue::Ident(sym) => {
+                        let cv = subs.get(&sym).cloned().unwrap().cv;
+                        assert!(matches!(cv, ComptimeValue::Int(_)));
+                        Box::new(cv)
+                    }
+                    _ => panic!("unsupported"),
+                },
+            ),
+            // TOOD
+            k => k.clone(),
+        }
+    }
+
     #[allow(clippy::only_used_in_recursion)]
-    fn substitute_expr(&self, expr: &Expr, subs: &HashMap<Symbol, TypeKind>) -> Expr {
+    fn substitute_expr(&self, expr: &Expr, subs: &HashMap<Symbol, ComptimeArg>) -> Expr {
         match &expr.node {
             ExprKind::Value(vk) => Spanned::new(ExprKind::Value(vk.clone()), expr.span.clone()),
             ExprKind::Call(call) => Spanned::new(
@@ -276,28 +312,38 @@ impl<'a> Analyzer<'a> {
                 ),
                 expr.span.clone(),
             ),
-            ExprKind::Comptime(cv) => {
-                Spanned::new(ExprKind::Comptime(cv.clone()), expr.span.clone())
-            }
+            ExprKind::Comptime(cv) => match cv {
+                ComptimeValue::Int(i) => Spanned::new(
+                    ExprKind::Value(ValueKind::Int(*i as i32)),
+                    expr.span.clone(),
+                ),
+                ComptimeValue::Ident(ident) => {
+                    todo!()
+                }
+                _ => todo!(),
+            },
             ExprKind::Allocation {
                 kind,
                 elements,
                 region,
-            } => Spanned::new(
-                ExprKind::Allocation {
-                    kind: kind.clone(),
-                    elements: elements
-                        .iter()
-                        .map(|e| self.substitute_expr(e, subs))
-                        .collect(),
-                    region: *region,
-                },
-                expr.span.clone(),
-            ),
+            } => {
+                let sub_kind = self.substitute_alloc_kind(kind, subs);
+                Spanned::new(
+                    ExprKind::Allocation {
+                        kind: sub_kind,
+                        elements: elements
+                            .iter()
+                            .map(|e| self.substitute_expr(e, subs))
+                            .collect(),
+                        region: *region,
+                    },
+                    expr.span.clone(),
+                )
+            }
         }
     }
 
-    fn substitute_stmt(&self, stmt: &Stmt, subs: &HashMap<Symbol, TypeKind>) -> Stmt {
+    fn substitute_stmt(&self, stmt: &Stmt, subs: &HashMap<Symbol, ComptimeArg>) -> Stmt {
         match &stmt.node {
             StmtKind::ValDec {
                 name,
@@ -366,7 +412,7 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn substitute_block(&self, block: &Block, subs: &HashMap<Symbol, TypeKind>) -> Block {
+    fn substitute_block(&self, block: &Block, subs: &HashMap<Symbol, ComptimeArg>) -> Block {
         Spanned::new(
             BlockInner {
                 stmts: block
@@ -385,35 +431,35 @@ impl<'a> Analyzer<'a> {
         )
     }
 
-    #[allow(clippy::only_used_in_recursion)]
-    fn resolve_generic_type(&self, ty: &TypeKind, subs: &HashMap<Symbol, TypeKind>) -> TypeKind {
-        match ty {
-            TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
-            TypeKind::Ptr(inner) => TypeKind::Ptr(Box::new(self.resolve_generic_type(inner, subs))),
-            TypeKind::Alloc(kind, region) => TypeKind::Alloc(kind.clone(), *region),
-            TypeKind::Fn(sig) => {
-                let new_params: Vec<_> = sig
-                    .params
-                    .params
-                    .iter()
-                    .map(|p| Param {
-                        pattern: p.pattern.clone(),
-                        ty: Type::synthetic(self.resolve_generic_type(&p.ty.node, subs)),
-                        is_comptime: p.is_comptime,
-                    })
-                    .collect();
-                TypeKind::Fn(Box::new(SignatureInner {
-                    params: Params { params: new_params },
-                    return_ty: sig
-                        .return_ty
-                        .as_ref()
-                        .map(|t| Type::synthetic(self.resolve_generic_type(&t.node, subs))),
-                }))
-            }
-            TypeKind::Resolved(inner) => self.resolve_generic_type(inner, subs),
-            _ => ty.clone(),
-        }
-    }
+    // #[allow(clippy::only_used_in_recursion)]
+    // fn resolve_generic_type(&self, ty: &TypeKind, subs: &HashMap<Symbol, ComptimeArg>) -> TypeKind {
+    //     match ty {
+    //         TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap().ty,
+    //         TypeKind::Ptr(inner) => TypeKind::Ptr(Box::new(self.resolve_generic_type(inner, subs))),
+    //         TypeKind::Alloc(kind, region) => TypeKind::Alloc(kind.clone(), *region),
+    //         TypeKind::Fn(sig) => {
+    //             let new_params: Vec<_> = sig
+    //                 .params
+    //                 .params
+    //                 .iter()
+    //                 .map(|p| Param {
+    //                     pattern: p.pattern.clone(),
+    //                     ty: Type::synthetic(self.resolve_generic_type(&p.ty.node, subs)),
+    //                     is_comptime: p.is_comptime,
+    //                 })
+    //                 .collect();
+    //             TypeKind::Fn(Box::new(SignatureInner {
+    //                 params: Params { params: new_params },
+    //                 return_ty: sig
+    //                     .return_ty
+    //                     .as_ref()
+    //                     .map(|t| Type::synthetic(self.resolve_generic_type(&t.node, subs))),
+    //             }))
+    //         }
+    //         TypeKind::Resolved(inner) => self.resolve_generic_type(inner, subs),
+    //         _ => ty.clone(),
+    //     }
+    // }
 
     fn monomorphize(
         &mut self,
@@ -441,7 +487,7 @@ impl<'a> Analyzer<'a> {
         for (param, cv) in sig_inner.params.params.iter().zip(comptime_args.iter()) {
             if let PatKind::Symbol(sym) = param.pattern.node {
                 let ty = self.type_of_comptime_value(cv);
-                subs.insert(sym, ty);
+                subs.insert(sym, ComptimeArg { ty, cv: cv.clone() });
             }
         }
 
@@ -457,7 +503,7 @@ impl<'a> Analyzer<'a> {
                         } else {
                             Some(Param {
                                 pattern: p.pattern.clone(),
-                                ty: Type::synthetic(self.resolve_generic_type(&p.ty.node, &subs)),
+                                ty: Type::synthetic(self.substitute_type(&p.ty.node, &subs)),
                                 is_comptime: false,
                             })
                         }
@@ -467,7 +513,7 @@ impl<'a> Analyzer<'a> {
             return_ty: sig_inner
                 .return_ty
                 .as_ref()
-                .map(|t| Type::synthetic(self.resolve_generic_type(&t.node, &subs))),
+                .map(|t| Type::synthetic(self.substitute_type(&t.node, &subs))),
         };
 
         let new_name = format!("{}_{}", self.front_ctx.resolve(base_fn), {
@@ -490,17 +536,13 @@ impl<'a> Analyzer<'a> {
             ));
         };
 
-        let DeclKind::Procedure {
-            block, is_comptime, ..
-        } = original_decl
-        else {
+        let DeclKind::Procedure { block, .. } = original_decl else {
             return Err(TypeError::new(
                 TypeErrorKind::GenericInstantiation("not a procedure".to_string()),
                 DUMMY_SPAN,
             ));
         };
 
-        *is_comptime = true;
         // TOOD: remove this clone, its so we drob the mut borrow
         let block = block.clone();
 
@@ -625,6 +667,45 @@ impl<'a> Analyzer<'a> {
                             });
                         }
                         return Ok(TypedValue::runtime(TypeKind::Record(filled_fields)));
+                    }
+                    AllocKind::Array(arr_ty, size) => {
+                        let resolved_ty = match **arr_ty {
+                            TypeKind::Any => {
+                                if elem_vals.is_empty() {
+                                    return Err(TypeError::new(
+                                        TypeErrorKind::TypeAnnotationRequired,
+                                        expr.span.clone(),
+                                    ));
+                                }
+                                Box::new(elem_vals[0].ty.clone())
+                            }
+                            _ => {
+                                if !elem_vals.is_empty() {
+                                    let first_elem = &elem_vals[0];
+                                    if !elem_vals.iter().all(|e| e.ty == first_elem.ty) {
+                                        return Err(TypeError::new(
+                                            TypeErrorKind::ExpectedType {
+                                                expected: first_elem.ty.clone(),
+                                                found: elem_vals.last().unwrap().ty.clone(),
+                                            },
+                                            expr.span.clone(),
+                                        ));
+                                    }
+                                    self.structural_typecheck(
+                                        &*arr_ty,
+                                        &first_elem.ty,
+                                        expr.span.clone(),
+                                    )?;
+                                }
+                                arr_ty.clone()
+                            }
+                        };
+
+                        *arr_ty = resolved_ty.clone();
+                        return Ok(TypedValue::runtime(TypeKind::Alloc(
+                            AllocKind::Array(resolved_ty, size.clone()),
+                            region_handle,
+                        )));
                     }
                     _ => kind.clone(),
                 };
@@ -779,6 +860,7 @@ impl<'a> Analyzer<'a> {
         if !comptime_args.is_empty()
             && let ExprKind::Value(ValueKind::Ident(fn_name)) = &call.callee.node
         {
+            println!("here: {comptime_args:?}");
             let monomorphized_decl = self.monomorphize(*fn_name, comptime_args)?;
             if let DeclKind::Procedure { name, sig, .. } = monomorphized_decl.node {
                 return_ty = sig
@@ -807,7 +889,7 @@ impl<'a> Analyzer<'a> {
     #[allow(clippy::only_used_in_recursion)]
     fn resolve_type_with_subs(&self, ty: &TypeKind, subs: &HashMap<Symbol, TypeKind>) -> TypeKind {
         match ty {
-            TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap_or_else(|| ty.clone()),
+            TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap(),
             TypeKind::Ptr(inner) => {
                 TypeKind::Ptr(Box::new(self.resolve_type_with_subs(inner, subs)))
             }
@@ -863,6 +945,7 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn structural_typecheck(
         &self,
         expr_ty: &TypeKind,
@@ -870,6 +953,25 @@ impl<'a> Analyzer<'a> {
         declared_ty_span: Span,
     ) -> Result<(), TypeError> {
         match (expr_ty, declared_ty) {
+            (TypeKind::TypeAlias(expr_sym), TypeKind::TypeAlias(declared_sym)) => {
+                if *expr_sym != *declared_sym {
+                    return Err(TypeError::new(
+                        TypeErrorKind::ExpectedType {
+                            expected: declared_ty.clone(),
+                            found: expr_ty.clone(),
+                        },
+                        declared_ty_span,
+                    ));
+                }
+            }
+            // TODO: is this allowed?
+            (_, TypeKind::Type) => {}
+            (TypeKind::Type, _) => {}
+            (ty, TypeKind::TypeAlias(sym)) => {
+                if let Some(ty_) = self.type_map.get(sym) {
+                    self.structural_typecheck(&ty_.node, ty, declared_ty_span.clone())?;
+                }
+            }
             (TypeKind::Variant(expr_variant), TypeKind::Variant(declared_variants)) => {
                 let expr_variant = expr_variant.first().unwrap();
                 if !declared_variants.contains(expr_variant) {
@@ -921,6 +1023,22 @@ impl<'a> Analyzer<'a> {
                     }
                 }
             }
+            (TypeKind::Any, _) => {}
+            (
+                TypeKind::Alloc(AllocKind::Array(tyk1, size1), _),
+                TypeKind::Alloc(AllocKind::Array(tyk2, size2), _),
+            ) => {
+                self.structural_typecheck(tyk1, tyk2, declared_ty_span.clone())?;
+                if size1 != size2 {
+                    return Err(TypeError::new(
+                        TypeErrorKind::ArraySizeMismatch {
+                            expected: *size1.clone(),
+                            found: *size2.clone(),
+                        },
+                        declared_ty_span,
+                    ));
+                }
+            }
             (TypeKind::Alloc(AllocKind::Str(_), _), TypeKind::Ptr(c))
                 if (**c) == TypeKind::Char => {}
             _ => {
@@ -957,20 +1075,6 @@ impl<'a> Analyzer<'a> {
             self.analyze_decl(decl)?;
         }
 
-        for decl in &mut module.declarations {
-            if let DeclKind::Procedure {
-                name, is_comptime, ..
-            } = &mut decl.node
-                && let Some(proc) = self.module_decls.get(&name.node)
-                && let DeclKind::Procedure {
-                    is_comptime: comptime,
-                    ..
-                } = &proc
-            {
-                *is_comptime = *comptime;
-            }
-        }
-
         module.declarations.extend(self.pending_monomorphs.clone());
         self.check_entry_point()
     }
@@ -984,6 +1088,7 @@ impl<'a> Analyzer<'a> {
                 found_main = true;
             }
         }
+
         #[cfg(not(test))]
         if !found_main {
             return Err(TypeError::new(
@@ -1043,7 +1148,7 @@ impl<'a> Analyzer<'a> {
                 block,
                 // constraints: _,
                 monomorph_of: _,
-                is_comptime: _,
+                is_comptime,
             } => {
                 if let Some(declared_fn_ty) = fn_ty {
                     let TypeKind::Fn(fn_sig) = &declared_fn_ty.node else {
@@ -1064,10 +1169,16 @@ impl<'a> Analyzer<'a> {
                 } else {
                     *fn_ty = Some(Type::synthetic(TypeKind::Fn(Box::new(sig.node.clone()))));
                 }
+
                 let previous_comptime = std::mem::take(&mut self.comptime_env);
                 for param in &sig.node.params.params {
                     if let PatKind::Symbol(sym) = param.pattern.node {
                         self.type_map.insert(sym, param.ty.clone());
+                    }
+
+                    if param.is_comptime {
+                        println!("{}", self.front_ctx.resolve(name.node));
+                        *is_comptime = true;
                     }
                 }
                 self.function_sigs.insert(name.node, sig.clone());
@@ -1077,15 +1188,7 @@ impl<'a> Analyzer<'a> {
                     && let Some(ret_ty) = &sig.node.return_ty
                 {
                     let expr_val = self.analyze_expr(expr)?;
-                    if expr_val.ty != ret_ty.node {
-                        return Err(TypeError::new(
-                            TypeErrorKind::ReturnTypeMismatch {
-                                expected: ret_ty.node.clone(),
-                                found: expr_val.ty,
-                            },
-                            expr.span.clone(),
-                        ));
-                    }
+                    self.structural_typecheck(&expr_val.ty, &ret_ty.node, expr.span.clone())?;
                 }
                 Ok(())
             }
@@ -1696,9 +1799,9 @@ mod tests {
         {
             assert!(monomorph_of.is_some(), "monomorph_of should be set");
             let params = &sig.node.params.params;
-            assert_eq!(params.len(), 2);
-            assert!(!params[0].is_comptime, "T param should become runtime");
-            assert!(!params[1].is_comptime, "x param should remain runtime");
+            assert_eq!(params.len(), 1);
+            assert!(!params[0].is_comptime, "x param should remain runtime");
+            assert_eq!(params[0].ty.node, TypeKind::Int);
         }
     }
 }

@@ -59,6 +59,7 @@ pub enum TypeAliasDefinition {
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum TypeKind {
+    Any,
     Alloc(AllocKind, Region),
     Bool,
     Char,
@@ -76,6 +77,17 @@ pub enum TypeKind {
     Variadic,
     Variant(Vec<VariantField>),
 }
+
+// impl TypeKind {
+//     pub fn assignable(&self) -> bool {
+//         match self {
+//             TypeKind::Alloc(AllocKind::Tuple(_), _) => false,
+//             TypeKind::Alloc(_, _) => true,
+//             TypeKind::Record(_) => true,
+//             _ => false,
+//         }
+//     }
+// }
 
 pub type Type = Spanned<TypeKind>;
 
@@ -98,6 +110,16 @@ pub enum AllocKind {
     Str(String),
     Tuple(Vec<TypeKind>),
     Variant(Symbol),
+}
+
+impl AllocKind {
+    pub fn fill_type(&mut self, ty: TypeKind) {
+        match self {
+            AllocKind::Array(ty_, _) => *ty_ = Box::new(ty),
+            AllocKind::DynArray(ty_) => *ty_ = Box::new(ty),
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
@@ -137,6 +159,20 @@ pub enum ExprKind {
     Call(Call),
     Index(Box<Expr>, Box<Expr>),
     Comptime(ComptimeValue),
+}
+
+impl ExprKind {
+    pub fn assignable(&self) -> bool {
+        match self {
+            ExprKind::Value(ValueKind::Ident(_)) => true,
+            ExprKind::FieldAccess(_, _) => true,
+            ExprKind::TupleAccess(_, _) => true,
+            // depends on type checker here
+            ExprKind::Call(_) => true,
+            ExprKind::Index(_, _) => true,
+            _ => false,
+        }
+    }
 }
 
 pub type Expr = Spanned<ExprKind>;

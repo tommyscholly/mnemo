@@ -300,8 +300,8 @@ fn parse_type_enum_with_adts() {
 fn parse_array_and_dyn_array() {
     let decs = expect_parse_ok(
         "foo :: () { 
-                x := [3]{1, 2, 3}
-                y := []{1, 2, 3}
+                x := [3]int{1, 2, 3}
+                y := []int{1, 2, 3}
             }",
         1,
     );
@@ -715,7 +715,7 @@ fn parse_match() {
 fn parse_region_alloc() {
     let decs = expect_parse_ok(
         "foo :: (comptime R: region) { 
-            x := [2]{ 1, 2 } @ local
+            x := [2]int{ 1, 2 } @ local
             y := (1, false) @ R
         }",
         1,

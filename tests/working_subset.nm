@@ -1,16 +1,16 @@
 printf :: extern (fmt: ^char, ...) : int
 
-allocation_function :: (comptime T: type, comptime n: int) : [n]{T} @ R
-// allocates introduces a new region `R` that the function may allocate in
-  with allocates @ R
-{
-    alloc := [n]{ 1, 2 } @ R
+// allocation_function :: (comptime T: type, comptime n: int) : [n]{T} @ R
+// // allocates introduces a new region `R` that the function may allocate in
+//   with allocates @ R
+// {
+//     alloc := [n]{ 1, 2 } @ R
+//
+//     return alloc
+// }
 
-    return alloc
-}
-
-allocate_comptime :: (comptime T: type, comptime R: region, comptime n: int) : [n]{T} @ R
-    alloc := [n]{ 1, 2 } @ R
+allocate_comptime :: (comptime T: type, comptime R: region, comptime n: int) : [n]T @ R {
+    alloc : [n]T @ R = [n]T{ } @ R
 
     return alloc
 }
@@ -23,10 +23,9 @@ return_int :: () : int {
     return 69420
 }
 
-main :: () {
-    untyped_int := 1
+main :: () { untyped_int := 1
     typed_int : int = 2
-    array := [2]{ 1, 2 }
+    array := [2]int{ 1, 2 }
     tuple := (52, true)
 
     inline_record : { a : int, b : int } = { a := untyped_int, b := typed_int }
@@ -70,7 +69,7 @@ main :: () {
       | 2 => { printf("%d\n", 2) }
       | _ => { printf("%d\n", 999) }
 
-    region_alloc := [2]{ 3, 4 } @ local
+    region_alloc := [2]int{ 3, 4 } @ local
 
     printf("%d\n", return_int())
 
@@ -83,5 +82,8 @@ main :: () {
     val2 := identity(bool, true)
     printf("%d\n", val2)
 
-    // dyn_array := [] { 1, 2 }
+    arr_alloc := allocate_comptime(int, local, 2)
+    // arr_alloc[0] = 100
+
+    printf("%d\n", arr_alloc[0])
 }
