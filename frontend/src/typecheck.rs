@@ -114,15 +114,29 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn type_of_comptime_value(cv: &ComptimeValue) -> TypeKind {
+    fn type_of_comptime_value(&self, cv: &ComptimeValue) -> TypeKind {
         match cv {
-            ComptimeValue::Int(_) => TypeKind::Int,
-            ComptimeValue::Bool(_) => TypeKind::Bool,
-            ComptimeValue::Type(tk) => TypeKind::Type,
-            ComptimeValue::Array(_) => {
-                TypeKind::Alloc(AllocKind::DynArray(Box::new(TypeKind::Int)), Region::Stack)
+            ComptimeValue::Array(cv) => {
+                let tys: Vec<TypeKind> = cv
+                    .iter()
+                    .map(|cv| self.type_of_comptime_value(cv))
+                    .collect();
+                if tys.is_empty() {
+                    TypeKind::Alloc(AllocKind::DynArray(Box::new(TypeKind::Unit)), Region::Stack)
+                } else {
+                    let ty = tys.first().unwrap();
+                    assert!(tys.iter().all(|t| t == ty));
+                    TypeKind::Alloc(AllocKind::DynArray(Box::new(ty.clone())), Region::Stack)
+                }
             }
-            ComptimeValue::Unit => TypeKind::Unit,
+            ComptimeValue::Bool(_) => TypeKind::Bool,
+            // TODO: should id be in the type map?
+            ComptimeValue::Ident(id) => {
+                self.type_of_comptime_value(self.comptime_env.get(id).unwrap())
+            }
+            ComptimeValue::Int(_) => TypeKind::Int,
+            ComptimeValue::Type(tk) => TypeKind::Type,
+            ComptimeValue::Region(_) => TypeKind::Region,
         }
     }
 
@@ -262,6 +276,9 @@ impl<'a> Analyzer<'a> {
                 ),
                 expr.span.clone(),
             ),
+            ExprKind::Comptime(cv) => {
+                Spanned::new(ExprKind::Comptime(cv.clone()), expr.span.clone())
+            }
             ExprKind::Allocation {
                 kind,
                 elements,
@@ -423,15 +440,7 @@ impl<'a> Analyzer<'a> {
         let mut subs = HashMap::new();
         for (param, cv) in sig_inner.params.params.iter().zip(comptime_args.iter()) {
             if let PatKind::Symbol(sym) = param.pattern.node {
-                let ty = match cv {
-                    ComptimeValue::Int(_) => TypeKind::Int,
-                    ComptimeValue::Bool(_) => TypeKind::Bool,
-                    ComptimeValue::Type(tk) => tk.clone(),
-                    ComptimeValue::Array(_) => {
-                        TypeKind::Alloc(AllocKind::DynArray(Box::new(TypeKind::Int)), Region::Stack)
-                    }
-                    ComptimeValue::Unit => TypeKind::Unit,
-                };
+                let ty = self.type_of_comptime_value(cv);
                 subs.insert(sym, ty);
             }
         }
@@ -503,7 +512,7 @@ impl<'a> Analyzer<'a> {
                 monomorphized_sig.clone(),
             )))),
             sig: Spanned::new(monomorphized_sig, DUMMY_SPAN),
-            constraints: vec![],
+            // constraints: vec![],
             block: monomorphized_block,
             monomorph_of: Some(key.clone()),
             is_comptime: false,
@@ -525,7 +534,7 @@ impl<'a> Analyzer<'a> {
                 )),
                 ValueKind::Ident(sym) => {
                     if let Some(cv) = self.comptime_env.get(sym) {
-                        let ty = Self::type_of_comptime_value(cv);
+                        let ty = self.type_of_comptime_value(cv);
                         return Ok(TypedValue::comptime(ty, cv.clone()));
                     }
                     let ty = self
@@ -656,7 +665,10 @@ impl<'a> Analyzer<'a> {
                     return Err(TypeError::new(
                         TypeErrorKind::ExpectedType {
                             expected: TypeKind::Alloc(
-                                AllocKind::Array(Box::new(TypeKind::Int), 0),
+                                AllocKind::Array(
+                                    Box::new(TypeKind::Int),
+                                    Box::new(ComptimeValue::Int(0)),
+                                ),
                                 Region::Stack,
                             ),
                             found: expr_val.ty.clone(),
@@ -666,6 +678,10 @@ impl<'a> Analyzer<'a> {
                 };
                 Ok(TypedValue::runtime((**ty).clone()))
             }
+            ExprKind::Comptime(cv) => Ok(TypedValue::comptime(
+                self.type_of_comptime_value(cv),
+                cv.clone(),
+            )),
         }
     }
 
@@ -748,15 +764,7 @@ impl<'a> Analyzer<'a> {
         let mut subs = HashMap::new();
         for (param, cv) in params.iter().zip(comptime_args.iter()) {
             if let PatKind::Symbol(sym) = param.pattern.node {
-                let ty = match cv {
-                    ComptimeValue::Int(_) => TypeKind::Int,
-                    ComptimeValue::Bool(_) => TypeKind::Bool,
-                    ComptimeValue::Type(tk) => tk.clone(),
-                    ComptimeValue::Array(_) => {
-                        todo!()
-                    }
-                    ComptimeValue::Unit => TypeKind::Unit,
-                };
+                let ty = self.type_of_comptime_value(cv);
                 subs.insert(sym, ty);
             }
         }
@@ -1033,7 +1041,7 @@ impl<'a> Analyzer<'a> {
                 fn_ty,
                 sig,
                 block,
-                constraints: _,
+                // constraints: _,
                 monomorph_of: _,
                 is_comptime: _,
             } => {

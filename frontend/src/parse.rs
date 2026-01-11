@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 
 use crate::ast::{
-    AllocKind, Block, BlockInner, Call, Constraint, Decl, DeclKind, Expr, ExprKind, IfElse, Match,
-    MatchArm, Module, Param, Params, Pat, PatKind, RecordField, Region, Signature, SignatureInner,
-    Stmt, StmtKind, Type, TypeAliasDefinition, TypeKind, ValueKind, VariantField,
+    AllocKind, Block, BlockInner, Call, ComptimeValue, Decl, DeclKind, Expr, ExprKind, IfElse,
+    Match, MatchArm, Module, Param, Params, Pat, PatKind, RecordField, Region, Signature,
+    SignatureInner, Stmt, StmtKind, Type, TypeAliasDefinition, TypeKind, ValueKind, VariantField,
 };
 use crate::ctx::{Ctx, Symbol};
 use crate::lex::{BinOp, Keyword, Token};
@@ -26,7 +26,6 @@ pub enum ParseErrorKind {
     ExpectedExpression,
     ExpectedToken(Token),
     UnexpectedEOF,
-    VariantMustStartWithDot,
 }
 
 impl ParseError {
@@ -113,6 +112,7 @@ fn parse_potential_region_alloc(
                         Region::Generic(name)
                     }
                 }
+                ExprKind::Comptime(ComptimeValue::Region(r)) => r,
                 _ => {
                     return Err(ParseError::new(
                         ParseErrorKind::ExpectedRegion,
@@ -484,8 +484,14 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
             },
             token.span,
         )),
-
         Token::Identifier(name) => {
+            if ctx.resolve(name) == "local" {
+                return Ok(Spanned::new(
+                    ExprKind::Comptime(ComptimeValue::Region(Region::Local)),
+                    token.span,
+                ));
+            }
+
             parse_identifier_expr(ctx, Spanned::new(name, token.span), tokens)
         }
 
@@ -513,7 +519,7 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
                 Token::RBracket => AllocKind::DynArray(TypeKind::Int.into()),
                 Token::Int(i) => {
                     expect_next(tokens, Token::RBracket)?;
-                    AllocKind::Array(TypeKind::Int.into(), i as usize)
+                    AllocKind::Array(TypeKind::Int.into(), ComptimeValue::Int(i as i128).into())
                 }
                 _ => {
                     return Err(ParseError::new(
@@ -748,6 +754,10 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
             let span = tokens.pop_front().unwrap().span;
             Spanned::new(TypeKind::Type, span)
         }
+        Some(Token::Keyword(Keyword::Region)) => {
+            let span = tokens.pop_front().unwrap().span;
+            Spanned::new(TypeKind::Region, span)
+        }
         Some(Token::Dot) => {
             // variant type starting with dot
             let dot_span = tokens.pop_front().unwrap().span;
@@ -790,12 +800,8 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
                 });
             }
 
-            loop {
-                if let Some(Token::Bar) = peek_token(tokens) {
-                    tokens.pop_front();
-                } else {
-                    break;
-                }
+            while let Some(Token::Bar) = peek_token(tokens) {
+                tokens.pop_front();
 
                 expect_next(tokens, Token::Dot)?;
                 let Spanned {
@@ -897,7 +903,11 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
                             ));
                         }
                     };
-                    AllocKind::Array(arr_ty.into(), i as usize)
+                    AllocKind::Array(arr_ty.into(), ComptimeValue::Int(i as i128).into())
+                }
+                Token::Identifier(name) => {
+                    // assuming comptime identifier that will be resolved during typechecking
+                    AllocKind::Array(TypeKind::Int.into(), ComptimeValue::Ident(name).into())
                 }
                 _ => {
                     return Err(ParseError::new(
@@ -1232,31 +1242,32 @@ fn parse_block(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResul
     Ok(Spanned::new(BlockInner { stmts, expr }, span))
 }
 
-fn parse_constraints(
-    ctx: &mut Ctx,
-    tokens: &mut VecDeque<SpannedToken>,
-) -> ParseResult<Vec<Constraint>> {
-    let mut constraints = Vec::new();
+// fn parse_constraints(
+//     ctx: &mut Ctx,
+//     tokens: &mut VecDeque<SpannedToken>,
+// ) -> ParseResult<Vec<Constraint>> {
+//     let mut constraints = Vec::new();
+//
+//     if let Some(Token::Keyword(Keyword::With)) = peek_token(tokens) {
+//         let _ = tokens.pop_front().unwrap();
+//
+//         while !tokens.is_empty() {
+//             match peek_token(tokens) {
+//                 Some(Token::Keyword(Keyword::Allocates)) => {
+//                     let t = tokens.pop_front().unwrap();
+//                     let Some(region) = check_region_type_annotation(ctx, tokens)? else {
+//                         return Err(ParseError::new(ParseErrorKind::ExpectedRegion, t.span));
+//                     };
+//                     constraints.push(Constraint::Allocates(region));
+//                 }
+//                 _ => break,
+//             }
+//         }
+//     }
+//
+//     Ok(constraints)
+// }
 
-    if let Some(Token::Keyword(Keyword::With)) = peek_token(tokens) {
-        let _ = tokens.pop_front().unwrap();
-
-        while !tokens.is_empty() {
-            match peek_token(tokens) {
-                Some(Token::Keyword(Keyword::Allocates)) => {
-                    let t = tokens.pop_front().unwrap();
-                    let Some(region) = check_region_type_annotation(ctx, tokens)? else {
-                        return Err(ParseError::new(ParseErrorKind::ExpectedRegion, t.span));
-                    };
-                    constraints.push(Constraint::Allocates(region));
-                }
-                _ => break,
-            }
-        }
-    }
-
-    Ok(constraints)
-}
 fn parse_procedure(
     ctx: &mut Ctx,
     name: Spanned<Symbol>,
@@ -1264,7 +1275,7 @@ fn parse_procedure(
     tokens: &mut VecDeque<SpannedToken>,
 ) -> ParseResult<Decl> {
     let sig = parse_proc_sig(ctx, tokens)?;
-    let constraints = parse_constraints(ctx, tokens)?;
+    // let constraints = parse_constraints(ctx, tokens)?;
     let block = parse_block(ctx, tokens)?;
     let span = name.span.merge(&block.span);
 
@@ -1273,7 +1284,7 @@ fn parse_procedure(
             name,
             fn_ty,
             sig,
-            constraints,
+            // constraints,
             block,
             monomorph_of: None,
             is_comptime: false,
@@ -1828,7 +1839,7 @@ mod tests {
         assert!(matches!(
             &expr1.node,
             ExprKind::Allocation {
-                kind: AllocKind::Array(_, 3),
+                kind: AllocKind::Array(_, _),
                 ..
             }
         ));
@@ -2222,13 +2233,13 @@ mod tests {
     #[test]
     fn parse_region_alloc() {
         let decs = expect_parse_ok(
-            "foo :: () { 
+            "foo :: (comptime R: region) { 
             x := [2]{ 1, 2 } @ local
             y := (1, false) @ R
         }",
             1,
         );
-        assert_decl_is_procedure(&decs[0], 0, 0);
+        assert_decl_is_procedure(&decs[0], 0, 1);
 
         let DeclKind::Procedure { block, .. } = &decs[0].node else {
             unreachable!()
@@ -2242,7 +2253,10 @@ mod tests {
             panic!("expected allocation")
         };
 
-        assert_eq!(*kind, AllocKind::Array(TypeKind::Int.into(), 2));
+        assert_eq!(
+            *kind,
+            AllocKind::Array(TypeKind::Int.into(), ComptimeValue::Int(2).into())
+        );
         assert_eq!(*region, Some(Region::Local));
 
         let StmtKind::ValDec { expr, .. } = &block.node.stmts[1].node else {
@@ -2254,7 +2268,7 @@ mod tests {
         };
         // types not resolved yet
         assert_eq!(*kind, AllocKind::Tuple(vec![]));
-        assert_eq!(*region, Some(Region::Generic(Symbol(4))));
+        assert_eq!(*region, Some(Region::Generic(Symbol(1))));
     }
 
     #[test]

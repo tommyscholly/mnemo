@@ -41,7 +41,7 @@ impl Diagnostic for LexError {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Keyword {
-    Allocates,
+    // Allocates,
     Bool,
     Char,
     Comptime,
@@ -51,6 +51,7 @@ pub enum Keyword {
     If,
     Int,
     Match,
+    Region,
     Return,
     Str,
     True,
@@ -63,7 +64,7 @@ impl TryFrom<&str> for Keyword {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
-            "allocates" => Ok(Keyword::Allocates),
+            // "allocates" => Ok(Keyword::Allocates),
             "bool" => Ok(Keyword::Bool),
             "char" => Ok(Keyword::Char),
             "comptime" => Ok(Keyword::Comptime),
@@ -73,6 +74,7 @@ impl TryFrom<&str> for Keyword {
             "if" => Ok(Keyword::If),
             "int" => Ok(Keyword::Int),
             "match" => Ok(Keyword::Match),
+            "region" => Ok(Keyword::Region),
             "return" => Ok(Keyword::Return),
             "str" => Ok(Keyword::Str),
             "true" => Ok(Keyword::True),

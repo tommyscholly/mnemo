@@ -62,12 +62,12 @@ pub enum TypeKind {
     Alloc(AllocKind, Region),
     Bool,
     Char,
-    ComptimeInt,
     Fn(Box<SignatureInner>),
     Int,
     // all ptrs must be qualified with a region (at some point)
     Ptr(Box<TypeKind> /*, Region */),
     Record(Vec<RecordField>),
+    Region,
     Resolved(Box<TypeKind>),
     Type,
     // for both type aliases and generic type parameters
@@ -91,7 +91,8 @@ impl Type {
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum AllocKind {
-    Array(Box<TypeKind>, usize),
+    // this should always be a ComptimeInt by the time we get to MIR lowering
+    Array(Box<TypeKind>, Box<ComptimeValue>),
     DynArray(Box<TypeKind>),
     Record(Vec<RecordField>),
     Str(String),
@@ -135,6 +136,7 @@ pub enum ExprKind {
     // a function call that is used in an assignment or declaration
     Call(Call),
     Index(Box<Expr>, Box<Expr>),
+    Comptime(ComptimeValue),
 }
 
 pub type Expr = Spanned<ExprKind>;
@@ -182,11 +184,12 @@ pub struct Param {
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum ComptimeValue {
-    Int(i128),
-    Bool(bool),
-    Type(TypeKind),
     Array(Vec<ComptimeValue>),
-    Unit,
+    Bool(bool),
+    Ident(Symbol),
+    Int(i128),
+    Region(Region),
+    Type(TypeKind),
 }
 
 #[derive(Debug, Clone)]
@@ -266,10 +269,10 @@ pub struct SignatureInner {
 
 pub type Signature = Spanned<SignatureInner>;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum Constraint {
-    Allocates(Region),
-}
+// #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+// pub enum Constraint {
+//     Allocates(Region),
+// }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct MonomorphKey {
@@ -299,7 +302,7 @@ pub enum DeclKind {
         // TODO: implement fn_tys
         fn_ty: Option<Type>,
         sig: Signature,
-        constraints: Vec<Constraint>,
+        // constraints: Vec<Constraint>,
         block: Block,
         monomorph_of: Option<MonomorphKey>,
         // filled in during typechecking, to skip over during lowering to MIR
