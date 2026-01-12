@@ -1,7 +1,7 @@
 printf :: extern (fmt: ^char, ...) : int
 
-allocate_comptime :: (comptime T: type, comptime R: region, comptime n: int) : [n]T @ R {
-    alloc : [n]T @ R = [n]T{ } @ R
+allocate_comptime :: (comptime T: type, comptime R: region, comptime n: int, default: T) : [T; n] @ R {
+    alloc : [T; n] @ R = [default; n] @ R
 
     return alloc
 }
@@ -14,9 +14,10 @@ return_int :: () : int {
     return 69420
 }
 
-main :: () { untyped_int := 1
+main :: () { 
+    untyped_int := 1
     typed_int : int = 2
-    array := [2]int{ 1, 2 }
+    array := [1, 2]
     tuple := (52, true)
 
     inline_record : { a : int, b : int } = { a := untyped_int, b := typed_int }
@@ -60,7 +61,7 @@ main :: () { untyped_int := 1
       | 2 => { printf("%d\n", 2) }
       | _ => { printf("%d\n", 999) }
 
-    region_alloc := [2]int{ 3, 4 } @ local
+    region_alloc := [ 3, 4 ] @ local
 
     printf("%d\n", return_int())
 
@@ -73,9 +74,17 @@ main :: () { untyped_int := 1
     val2 := identity(bool, true)
     printf("%d\n", val2)
 
-    arr_alloc := allocate_comptime(int, local, 2)
+    arr_alloc := allocate_comptime(int, local, 2, 6969)
+    printf("[%d, %d]\n", arr_alloc[0], arr_alloc[1])
     arr_alloc[0] = 100
     arr_alloc[1] = 150
-
     printf("[%d, %d]\n", arr_alloc[0], arr_alloc[1])
+
+    arr_alloc2 := allocate_comptime(int, local, 50, 1111)
+    printf("idx 30: %d\n", arr_alloc2[30])
+
+    record_update := { z := "test" }
+    printf("record_update %s\n", record_update.z)
+    record_update.z = "tttttttttt"
+    printf("record_update %s\n", record_update.z)
 }

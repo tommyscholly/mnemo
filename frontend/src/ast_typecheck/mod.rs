@@ -1271,11 +1271,6 @@ impl<'a> Analyzer<'a> {
                     }
                 }
 
-                let name_ = self.front_ctx.resolve(name.node).to_string();
-                println!(
-                    "inferred type for {}: {:?}\n\t{:?}",
-                    name_, inferred_ty, expr.node
-                );
                 *ty = Some(inferred_ty.clone());
                 self.type_map.insert(name.node, inferred_ty);
                 Ok(())

@@ -514,6 +514,8 @@ impl AstVisitor for AstToMIR<'_> {
                         }
                     };
 
+                    let ty = ast_type_to_mir_type(&ty);
+
                     let array_size = match kind {
                         AllocKind::Array(_, ref size) => match size.as_ref() {
                             ComptimeValue::Int(i) => *i as usize,
@@ -531,25 +533,28 @@ impl AstVisitor for AstToMIR<'_> {
                     }
                 } else {
                     for elem in elements {
+                        print!("elem {elem:?} -> ");
                         let elem = self.visit_expr(elem);
+                        println!("elem rvalue {elem:?}");
                         let (op, ty) = match elem {
                             mir::RValue::Use(mir::Operand::Copy(place)) => {
-                                let local_ty = self.local_types.get(&place.local).unwrap().clone();
-                                (mir::Operand::Copy(place), local_ty)
+                                let local_ty = self.local_types.get(&place.local).unwrap();
+                                (mir::Operand::Copy(place), ast_type_to_mir_type(local_ty))
                             }
                             mir::RValue::Use(mir::Operand::Constant(c)) => {
-                                let local_ty = Self::type_of_constant(&c);
+                                let local_ty = ast_type_to_mir_type(&Self::type_of_constant(&c));
+
                                 (mir::Operand::Constant(c), local_ty)
                             }
                             _ => {
-                                let elem_local = self.new_local(&TypeKind::Int);
+                                let ty = elem.type_of(&self.get_current_function().locals);
+                                let elem_local = self.new_local_with_ty(ty.clone());
                                 self.get_current_block()
                                     .stmts
                                     .push(mir::Statement::Assign(elem_local, elem));
 
                                 let place = mir::Place::new(elem_local, mir::PlaceKind::Deref);
-                                let local_ty = self.local_types.get(&elem_local).unwrap().clone();
-                                (mir::Operand::Copy(place), local_ty)
+                                (mir::Operand::Copy(place), ty)
                             }
                         };
                         ops.push(op);
@@ -567,13 +572,10 @@ impl AstVisitor for AstToMIR<'_> {
 
                         mir::RValue::Alloc(mir::AllocKind::Tuple(tys), ops)
                     }
-                    AllocKind::Record(_fields) => {
-                        let tys = elem_types
-                            .into_iter()
-                            .map(|t| ast_type_to_mir_type(&t))
-                            .collect();
+                    AllocKind::Record(fields) => {
+                        println!("record {fields:?}\n\t{elem_types:?}");
 
-                        mir::RValue::Alloc(mir::AllocKind::Record(tys), ops)
+                        mir::RValue::Alloc(mir::AllocKind::Record(elem_types), ops)
                     }
                     AllocKind::Variant(variant_name) => {
                         let variant_id = variant_name.0 as u8;

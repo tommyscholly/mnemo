@@ -146,6 +146,44 @@ impl Place {
     pub fn new(local: LocalId, kind: PlaceKind) -> Self {
         Self { local, kind }
     }
+
+    pub fn type_of(&self, locals: &[Local]) -> Ty {
+        let local = locals.iter().find(|l| l.id == self.local).unwrap();
+        match &self.kind {
+            PlaceKind::Deref => local.ty.clone(),
+            PlaceKind::Field(_, ty) => ty.clone(),
+            PlaceKind::Index(_) => match &local.ty {
+                Ty::Array(elem_ty, _) => (**elem_ty).clone(),
+                Ty::DynArray(elem_ty) => (**elem_ty).clone(),
+                _ => panic!("Index on non-array type: {}", local.ty),
+            },
+        }
+    }
+}
+
+impl RValue {
+    pub fn type_of(&self, locals: &[Local]) -> Ty {
+        match self {
+            RValue::Use(operand) => operand.type_of(locals),
+            RValue::BinOp(op, lhs, _rhs) => match op {
+                // Arithmetic operators return Int
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => Ty::Int,
+                // Comparison operators return Bool
+                // BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Ty::Bool,
+                // Logical operators return Bool
+                BinOp::And | BinOp::Or => Ty::Bool,
+                // Fallback: use the type of the left operand
+                _ => lhs.type_of(locals),
+            },
+            RValue::Alloc(kind, operands) => match kind {
+                AllocKind::Array(ty) => Ty::Array(Box::new(ty.clone()), operands.len()),
+                AllocKind::Record(tys) => Ty::Record(tys.clone()),
+                AllocKind::Str(_) => Ty::Str,
+                AllocKind::Tuple(tys) => Ty::Tuple(tys.clone()),
+                AllocKind::Variant(tag, ty) => Ty::TaggedUnion(vec![(*tag, ty.clone())]),
+            },
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -154,16 +192,33 @@ pub enum Constant {
     Bool(bool),
 }
 
+impl Constant {
+    pub fn type_of(&self) -> Ty {
+        match self {
+            Constant::Int(_) => Ty::Int,
+            Constant::Bool(_) => Ty::Bool,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Operand {
     Constant(Constant),
     Copy(Place),
 }
 
+impl Operand {
+    pub fn type_of(&self, locals: &[Local]) -> Ty {
+        match self {
+            Operand::Constant(c) => c.type_of(),
+            Operand::Copy(place) => place.type_of(locals),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum AllocKind {
     Array(Ty),
-    DynArray(Ty),
     Record(Vec<Ty>),
     Str(String),
     Tuple(Vec<Ty>),
@@ -183,7 +238,6 @@ impl Display for AllocKind {
 
                 write!(f, "{}", ty_str)
             }
-            AllocKind::DynArray(ty) => write!(f, "dyn_array<{}>", ty),
             AllocKind::Str(s) => write!(f, "str<{}>", s),
             AllocKind::Record(tys) => {
                 let ty_str = tys
