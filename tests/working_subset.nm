@@ -1,14 +1,5 @@
 printf :: extern (fmt: ^char, ...) : int
 
-// allocation_function :: (comptime T: type, comptime n: int) : [n]{T} @ R
-// // allocates introduces a new region `R` that the function may allocate in
-//   with allocates @ R
-// {
-//     alloc := [n]{ 1, 2 } @ R
-//
-//     return alloc
-// }
-
 allocate_comptime :: (comptime T: type, comptime R: region, comptime n: int) : [n]T @ R {
     alloc : [n]T @ R = [n]T{ } @ R
 
