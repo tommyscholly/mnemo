@@ -297,11 +297,10 @@ fn parse_type_enum_with_adts() {
 }
 
 #[test]
-fn parse_array_and_dyn_array() {
+fn parse_array() {
     let decs = expect_parse_ok(
         "foo :: () { 
-                x := [3]int{1, 2, 3}
-                y := []int{1, 2, 3}
+                x := [1, 2, 3]
             }",
         1,
     );
@@ -310,7 +309,7 @@ fn parse_array_and_dyn_array() {
     let DeclKind::Procedure { block, .. } = &decs[0].node else {
         unreachable!()
     };
-    assert_eq!(block.node.stmts.len(), 2);
+    assert_eq!(block.node.stmts.len(), 1);
 
     // Verify first is Array, second is DynArray
     let StmtKind::ValDec { expr: expr1, .. } = &block.node.stmts[0].node else {
@@ -321,17 +320,6 @@ fn parse_array_and_dyn_array() {
         &expr1.node,
         ExprKind::Allocation {
             kind: AllocKind::Array(_, _),
-            ..
-        }
-    ));
-
-    let StmtKind::ValDec { expr: expr2, .. } = &block.node.stmts[1].node else {
-        unreachable!()
-    };
-    assert!(matches!(
-        &expr2.node,
-        ExprKind::Allocation {
-            kind: AllocKind::DynArray(_),
             ..
         }
     ));
@@ -715,7 +703,7 @@ fn parse_match() {
 fn parse_region_alloc() {
     let decs = expect_parse_ok(
         "foo :: (comptime R: region) { 
-            x := [2]int{ 1, 2 } @ local
+            x := [ 1, 2 ] @ local
             y := (1, false) @ R
         }",
         1,
@@ -736,7 +724,7 @@ fn parse_region_alloc() {
 
     assert_eq!(
         *kind,
-        AllocKind::Array(TypeKind::Int.into(), ComptimeValue::Int(2).into())
+        AllocKind::Array(TypeKind::Any.into(), ComptimeValue::Int(2).into())
     );
     assert_eq!(*region, Some(Region::Local));
 

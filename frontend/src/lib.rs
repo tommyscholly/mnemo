@@ -1,5 +1,5 @@
 mod ast;
-mod to_mir;
+mod ast_typecheck;
 mod ast_visitor;
 mod ctx;
 mod lex;
@@ -7,15 +7,15 @@ mod macros;
 pub mod mir;
 mod parse;
 mod span;
-mod typecheck;
+mod to_mir;
 
 pub use ctx::{Ctx, Symbol};
 pub use lex::BinOp;
 pub use mir::{Function, visualize};
 pub use span::{Diagnostic, SourceMap, Span, SpanExt, Spanned};
 
-use to_mir::AstToMIR;
 use ast_visitor::AstVisitor;
+use to_mir::AstToMIR;
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -41,7 +41,7 @@ pub fn do_frontend(file: &str, output_mir: bool) -> Result<(mir::Module, Ctx), S
 
     let mut module = parse::parse(&mut ctx, tokens).map_err(|e| e.format(&source_map))?;
 
-    typecheck::typecheck(&mut ctx, &mut module).map_err(|e| e.format(&source_map))?;
+    ast_typecheck::typecheck(&mut ctx, &mut module).map_err(|e| e.format(&source_map))?;
 
     let mut ast_visitor = AstToMIR::new(&ctx);
     ast_visitor.visit_module(module);

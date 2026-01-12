@@ -103,6 +103,7 @@ fn parse_potential_region_alloc(
         if let ExprKind::Allocation {
             kind: _,
             elements: _,
+            default_elem: _,
             region,
         } = &mut expr.node
         {
@@ -431,6 +432,7 @@ fn parse_variant_expr(
             ExprKind::Allocation {
                 kind: AllocKind::Variant(variant_name),
                 elements: args,
+                default_elem: None,
                 region: None,
             },
             span,
@@ -440,6 +442,7 @@ fn parse_variant_expr(
             ExprKind::Allocation {
                 kind: AllocKind::Variant(variant_name),
                 elements: vec![],
+                default_elem: None,
                 region: None,
             },
             span,
@@ -482,6 +485,7 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
             ExprKind::Allocation {
                 kind: AllocKind::Str(s),
                 elements: vec![],
+                default_elem: None,
                 region: None,
             },
             token.span,
@@ -513,67 +517,197 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
             parse_variant_expr(ctx, variant_name, span, tokens)
         }
 
+        // array expr
         Token::LBracket => {
             let start_span = token.span;
-            let next_tok = tokens.pop_front().ok_or_else(ParseError::eof)?;
 
-            let mut alloc_kind = match next_tok.node {
-                Token::RBracket => AllocKind::DynArray(TypeKind::Int.into()),
-                Token::Int(i) => {
-                    expect_next(tokens, Token::RBracket)?;
-                    AllocKind::Array(TypeKind::Any.into(), ComptimeValue::Int(i as i128).into())
-                }
-                Token::Identifier(name) => {
-                    expect_next(tokens, Token::RBracket)?;
-                    // assuming comptime identifier that will be resolved during typechecking
-                    AllocKind::Array(TypeKind::Any.into(), ComptimeValue::Ident(name).into())
-                }
-                _ => {
-                    return Err(ParseError::new(
-                        ParseErrorKind::ExpectedExpression,
-                        next_tok.span,
-                    ));
-                }
-            };
-
-            let Some(array_ty) = parse_type(ctx, tokens)? else {
-                return Err(ParseError::new(
-                    ParseErrorKind::ExpectedType,
-                    peek_span(tokens).unwrap_or(start_span),
+            // Handle empty list []
+            if let Some(Token::RBracket) = peek_token(tokens) {
+                let end_span = expect_next(tokens, Token::RBracket)?;
+                return Ok(Spanned::new(
+                    ExprKind::Allocation {
+                        kind: AllocKind::Array(TypeKind::Any.into(), ComptimeValue::Int(0).into()),
+                        elements: vec![],
+                        default_elem: None,
+                        region: None,
+                    },
+                    start_span.merge(&end_span),
                 ));
-            };
-
-            alloc_kind.fill_type(array_ty.node);
-
-            expect_next(tokens, Token::LBrace)?;
-
-            let mut exprs = Vec::new();
-
-            loop {
-                if let Some(Token::RBrace) = peek_token(tokens) {
-                    break;
-                }
-
-                exprs.push(parse_expr(ctx, tokens)?);
-
-                if let Some(Token::Comma) = peek_token(tokens) {
-                    tokens.pop_front();
-                }
             }
 
-            let end_span = expect_next(tokens, Token::RBrace)?;
-            let span = start_span.merge(&end_span);
+            // Parse first expression
+            let first_expr = parse_expr(ctx, tokens)?;
 
-            Ok(Spanned::new(
-                ExprKind::Allocation {
-                    kind: alloc_kind,
-                    elements: exprs,
-                    region: None,
-                },
-                span,
-            ))
+            match peek_token(tokens) {
+                // [expr; size] - default array syntax
+                Some(Token::SemiColon) => {
+                    tokens.pop_front(); // consume ;
+                    let size_expr = parse_expr(ctx, tokens)?;
+                    let size_cv = match &size_expr.node {
+                        ExprKind::Value(ValueKind::Int(i)) => ComptimeValue::Int(*i as i128),
+                        ExprKind::Value(ValueKind::Ident(name)) => ComptimeValue::Ident(*name),
+                        _ => {
+                            return Err(ParseError::new(
+                                ParseErrorKind::ExpectedExpression,
+                                size_expr.span,
+                            ));
+                        }
+                    };
+                    expect_next(tokens, Token::RBracket)?;
+                    let region = check_region_type_annotation(ctx, tokens)?;
+                    let span = start_span.merge(&size_expr.span);
+
+                    Ok(Spanned::new(
+                        ExprKind::Allocation {
+                            kind: AllocKind::Array(TypeKind::Any.into(), size_cv.into()),
+                            elements: vec![],
+                            default_elem: Some(Box::new(first_expr)),
+                            region,
+                        },
+                        span,
+                    ))
+                }
+
+                // [expr, expr, ...] or [expr] - list literal syntax
+                Some(Token::Comma) | Some(Token::RBracket) => {
+                    let mut exprs = vec![first_expr];
+
+                    while let Some(Token::Comma) = peek_token(tokens) {
+                        tokens.pop_front(); // consume ,
+                        if let Some(Token::RBracket) = peek_token(tokens) {
+                            break; // trailing comma
+                        }
+                        exprs.push(parse_expr(ctx, tokens)?);
+                    }
+
+                    let end_span = expect_next(tokens, Token::RBracket)?;
+                    let span = start_span.merge(&end_span);
+
+                    Ok(Spanned::new(
+                        ExprKind::Allocation {
+                            kind: AllocKind::Array(
+                                TypeKind::Any.into(),
+                                ComptimeValue::Int(exprs.len() as i128).into(),
+                            ),
+                            elements: exprs,
+                            default_elem: None,
+                            region: None,
+                        },
+                        span,
+                    ))
+                }
+
+                _ => Err(ParseError::new(
+                    ParseErrorKind::ExpectedExpression,
+                    peek_span(tokens).unwrap_or(start_span),
+                )),
+            }
         }
 
+        // Token::LBracket => {
+        //     let start_span = token.span;
+        //
+        //     let is_default_array = match peek_token(tokens) {
+        //         Some(Token::SemiColon) => true,
+        //         Some(Token::Int(_) | Token::Identifier(_) | Token::Keyword(_)) => {
+        //             let mut temp_tokens = tokens.clone();
+        //             let _ = parse_expr(ctx, &mut temp_tokens);
+        //             matches!(peek_token(&temp_tokens), Some(Token::SemiColon))
+        //         }
+        //         _ => false,
+        //     };
+        //
+        //     if is_default_array {
+        //         let expr = parse_expr(ctx, tokens)?;
+        //         let _ = expect_next(tokens, Token::SemiColon)?;
+        //         let default_elem = Box::new(expr);
+        //
+        //         let size_expr = parse_expr(ctx, tokens)?;
+        //         let size_cv = match &size_expr.node {
+        //             ExprKind::Value(ValueKind::Int(i)) => ComptimeValue::Int(*i as i128),
+        //             ExprKind::Value(ValueKind::Ident(name)) => ComptimeValue::Ident(*name),
+        //             _ => {
+        //                 return Err(ParseError::new(
+        //                     ParseErrorKind::ExpectedExpression,
+        //                     size_expr.span,
+        //                 ));
+        //             }
+        //         };
+        //         expect_next(tokens, Token::RBracket)?;
+        //
+        //         let region = check_region_type_annotation(ctx, tokens)?;
+        //
+        //         let span = start_span.merge(&size_expr.span);
+        //
+        //         Ok(Spanned::new(
+        //             ExprKind::Allocation {
+        //                 kind: AllocKind::Array(TypeKind::Any.into(), size_cv.into()),
+        //                 elements: vec![],
+        //                 default_elem: Some(default_elem),
+        //                 region,
+        //             },
+        //             span,
+        //         ))
+        //     } else {
+        //         let next_tok = tokens.pop_front().ok_or_else(ParseError::eof)?;
+        //
+        //         let mut alloc_kind = match next_tok.node {
+        //             Token::RBracket => AllocKind::DynArray(TypeKind::Int.into()),
+        //             Token::Int(i) => {
+        //                 expect_next(tokens, Token::RBracket)?;
+        //                 AllocKind::Array(TypeKind::Any.into(), ComptimeValue::Int(i as i128).into())
+        //             }
+        //             Token::Identifier(name) => {
+        //                 expect_next(tokens, Token::RBracket)?;
+        //                 AllocKind::Array(TypeKind::Any.into(), ComptimeValue::Ident(name).into())
+        //             }
+        //             _ => {
+        //                 return Err(ParseError::new(
+        //                     ParseErrorKind::ExpectedExpression,
+        //                     next_tok.span,
+        //                 ));
+        //             }
+        //         };
+        //
+        //         let Some(array_ty) = parse_type(ctx, tokens)? else {
+        //             return Err(ParseError::new(
+        //                 ParseErrorKind::ExpectedType,
+        //                 peek_span(tokens).unwrap_or(start_span),
+        //             ));
+        //         };
+        //
+        //         alloc_kind.fill_type(array_ty.node);
+        //
+        //         expect_next(tokens, Token::LBrace)?;
+        //
+        //         let mut exprs = Vec::new();
+        //
+        //         loop {
+        //             if let Some(Token::RBrace) = peek_token(tokens) {
+        //                 break;
+        //             }
+        //
+        //             exprs.push(parse_expr(ctx, tokens)?);
+        //
+        //             if let Some(Token::Comma) = peek_token(tokens) {
+        //                 tokens.pop_front();
+        //             }
+        //         }
+        //
+        //         let end_span = expect_next(tokens, Token::RBrace)?;
+        //         let span = start_span.merge(&end_span);
+        //
+        //         Ok(Spanned::new(
+        //             ExprKind::Allocation {
+        //                 kind: alloc_kind,
+        //                 elements: exprs,
+        //                 default_elem: None,
+        //                 region: None,
+        //             },
+        //             span,
+        //         ))
+        //     }
+        // }
         Token::LParen => {
             let start_span = token.span;
             let expr = parse_expr(ctx, tokens)?;
@@ -602,6 +736,7 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
                         // filled in during typechecking
                         kind: AllocKind::Tuple(vec![]),
                         elements: exprs,
+                        default_elem: None,
                         region: None,
                     },
                     span,
@@ -645,6 +780,7 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
                 ExprKind::Allocation {
                     kind: AllocKind::Record(fields),
                     elements: exprs,
+                    default_elem: None,
                     region: None,
                 },
                 span,
@@ -904,9 +1040,6 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
         }
         Some(Token::LBracket) => {
             let start_span = tokens.pop_front().unwrap().span;
-            let next_tok = tokens.pop_front().ok_or_else(ParseError::eof)?;
-
-            expect_next(tokens, Token::RBracket)?;
 
             let arr_ty = match parse_type(ctx, tokens)? {
                 Some(ty) => ty,
@@ -918,6 +1051,9 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
                 }
             };
 
+            expect_next(tokens, Token::SemiColon)?;
+
+            let next_tok = tokens.pop_front().ok_or_else(ParseError::eof)?;
             let alloc_kind = match next_tok.node {
                 Token::Int(i) => {
                     AllocKind::Array(arr_ty.node.into(), ComptimeValue::Int(i as i128).into())
@@ -933,6 +1069,8 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
                     ));
                 }
             };
+
+            expect_next(tokens, Token::RBracket)?;
 
             let span = start_span.merge(&arr_ty.span);
 

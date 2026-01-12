@@ -351,12 +351,9 @@ impl<'a> AstToMIR<'a> {
                 monomorph_of: _,
                 is_comptime,
             } => {
-                let name_ = self.ctx.resolve(name.node).to_string();
                 if *is_comptime {
-                    println!("skipping {name_}");
                     return;
                 }
-                println!("compiling {name_}");
 
                 let name_sym = name.node;
                 // TODO: we do not use function types yet
@@ -365,7 +362,6 @@ impl<'a> AstToMIR<'a> {
                 self.function_sigs.insert(name_sym, sig.clone());
 
                 let sig_inner = &sig.node;
-                eprintln!("\t{sig_inner:?}");
                 let return_ty = sig_inner
                     .return_ty
                     .as_ref()
@@ -489,13 +485,15 @@ impl AstVisitor for AstToMIR<'_> {
             ExprKind::Allocation {
                 kind,
                 elements,
+                default_elem,
                 region: _,
             } => {
                 let mut ops = Vec::new();
                 let mut elem_types = Vec::new();
-                for elem in elements {
-                    let elem = self.visit_expr(elem);
-                    let (op, ty) = match elem {
+
+                if let Some(default_elem) = default_elem {
+                    let default_mir = self.visit_expr(*default_elem);
+                    let (op, ty) = match default_mir {
                         mir::RValue::Use(mir::Operand::Copy(place)) => {
                             let local_ty = self.local_types.get(&place.local).unwrap().clone();
                             (mir::Operand::Copy(place), local_ty)
@@ -508,15 +506,55 @@ impl AstVisitor for AstToMIR<'_> {
                             let elem_local = self.new_local(&TypeKind::Int);
                             self.get_current_block()
                                 .stmts
-                                .push(mir::Statement::Assign(elem_local, elem));
+                                .push(mir::Statement::Assign(elem_local, default_mir));
 
                             let place = mir::Place::new(elem_local, mir::PlaceKind::Deref);
                             let local_ty = self.local_types.get(&elem_local).unwrap().clone();
                             (mir::Operand::Copy(place), local_ty)
                         }
                     };
-                    ops.push(op);
-                    elem_types.push(ty);
+
+                    let array_size = match kind {
+                        AllocKind::Array(_, ref size) => match size.as_ref() {
+                            ComptimeValue::Int(i) => *i as usize,
+                            ComptimeValue::Ident(_) => {
+                                panic!("comptime identifier should be resolved by typechecker")
+                            }
+                            _ => panic!("unexpected comptime value for array size"),
+                        },
+                        _ => panic!("expected array allocation"),
+                    };
+
+                    for _ in 0..array_size {
+                        ops.push(op.clone());
+                        elem_types.push(ty.clone());
+                    }
+                } else {
+                    for elem in elements {
+                        let elem = self.visit_expr(elem);
+                        let (op, ty) = match elem {
+                            mir::RValue::Use(mir::Operand::Copy(place)) => {
+                                let local_ty = self.local_types.get(&place.local).unwrap().clone();
+                                (mir::Operand::Copy(place), local_ty)
+                            }
+                            mir::RValue::Use(mir::Operand::Constant(c)) => {
+                                let local_ty = Self::type_of_constant(&c);
+                                (mir::Operand::Constant(c), local_ty)
+                            }
+                            _ => {
+                                let elem_local = self.new_local(&TypeKind::Int);
+                                self.get_current_block()
+                                    .stmts
+                                    .push(mir::Statement::Assign(elem_local, elem));
+
+                                let place = mir::Place::new(elem_local, mir::PlaceKind::Deref);
+                                let local_ty = self.local_types.get(&elem_local).unwrap().clone();
+                                (mir::Operand::Copy(place), local_ty)
+                            }
+                        };
+                        ops.push(op);
+                        elem_types.push(ty);
+                    }
                 }
 
                 match kind {
@@ -528,11 +566,6 @@ impl AstVisitor for AstToMIR<'_> {
                         let tys = tys.into_iter().map(|t| ast_type_to_mir_type(&t)).collect();
 
                         mir::RValue::Alloc(mir::AllocKind::Tuple(tys), ops)
-                    }
-
-                    AllocKind::DynArray(ty) => {
-                        let ty = ast_type_to_mir_type(&ty);
-                        mir::RValue::Alloc(mir::AllocKind::DynArray(ty), ops)
                     }
                     AllocKind::Record(_fields) => {
                         let tys = elem_types
@@ -621,6 +654,13 @@ impl AstVisitor for AstToMIR<'_> {
                 let local_id = self.new_local(&ty.node);
 
                 self.symbol_table.insert(name.node, local_id);
+
+                // println!(
+                //     "assigning to {}: {:?}\n\t{:?}",
+                //     self.ctx.resolve(name.node),
+                //     ty,
+                //     expr.node
+                // );
 
                 self.in_assign_expr = true;
                 let rvalue = self.visit_expr(expr);
@@ -921,7 +961,6 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
                 mir::Ty::Tuple(tys)
             }
 
-            AllocKind::DynArray(ty) => mir::Ty::DynArray(Box::new(ast_type_to_mir_type(ty))),
             AllocKind::Array(ty, len) => {
                 if let ComptimeValue::Int(len) = **len {
                     mir::Ty::Array(Box::new(ast_type_to_mir_type(ty)), len as usize)

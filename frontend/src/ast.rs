@@ -105,7 +105,6 @@ impl Type {
 pub enum AllocKind {
     // this should always be a ComptimeInt by the time we get to MIR lowering
     Array(Box<TypeKind>, Box<ComptimeValue>),
-    DynArray(Box<TypeKind>),
     Record(Vec<RecordField>),
     Str(String),
     Tuple(Vec<TypeKind>),
@@ -116,7 +115,6 @@ impl AllocKind {
     pub fn fill_type(&mut self, ty: TypeKind) {
         match self {
             AllocKind::Array(ty_, _) => *ty_ = Box::new(ty),
-            AllocKind::DynArray(ty_) => *ty_ = Box::new(ty),
             _ => {}
         }
     }
@@ -145,6 +143,8 @@ pub enum ExprKind {
         kind: AllocKind,
         // some allocations may not have elements, we just leave this empty
         elements: Vec<Expr>,
+        // for [expr; n] syntax - the default element to repeat n times
+        default_elem: Option<Box<Expr>>,
         // without a region, this is allocated in the function's implicit contextual region
         region: Option<Region>,
     },
