@@ -94,6 +94,11 @@ impl MIRVisualizer for Statement {
                 args.iter().for_each(|a| a.visualize(indent));
                 println!(") {}", dest)
             }
+            Statement::Store(place, expr) => {
+                print!("{place:?} = ");
+                expr.visualize(indent);
+                println!();
+            }
         }
     }
 }

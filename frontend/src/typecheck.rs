@@ -86,6 +86,7 @@ pub enum TypeErrorKind {
     UnknownMethod(Symbol),
     NotCallable,
     ExpectedRecord,
+    Unassignable,
     // Comptime-related errors
     NotComptime,
     ComptimeArgRequired,
@@ -361,9 +362,10 @@ impl<'a> Analyzer<'a> {
                 },
                 stmt.span.clone(),
             ),
-            StmtKind::Assign { name, expr } => Spanned::new(
+            StmtKind::Assign { location, expr } => Spanned::new(
                 StmtKind::Assign {
-                    name: name.clone(),
+                    // TODO: should the location be substituted?
+                    location: location.clone(),
                     expr: self.substitute_expr(expr, subs),
                 },
                 stmt.span.clone(),
@@ -1238,18 +1240,21 @@ impl<'a> Analyzer<'a> {
                 self.type_map.insert(name.node, inferred_ty);
                 Ok(())
             }
-            StmtKind::Assign { name, expr } => {
-                let val = self.analyze_expr(expr)?;
-                let Some(expected_type) = self.type_map.get(&name.node) else {
+            StmtKind::Assign { location, expr } => {
+                let location_val = self.analyze_expr(location)?;
+                if !location.node.assignable() {
                     return Err(TypeError::new(
-                        TypeErrorKind::UnknownSymbol(name.node),
-                        name.span.clone(),
+                        TypeErrorKind::Unassignable,
+                        location.span.clone(),
                     ));
-                };
-                if expected_type.node != val.ty {
+                }
+
+                let val = self.analyze_expr(expr)?;
+
+                if location_val.ty != val.ty {
                     return Err(TypeError::new(
                         TypeErrorKind::ExpectedType {
-                            expected: expected_type.node.clone(),
+                            expected: location_val.ty.clone(),
                             found: val.ty,
                         },
                         expr.span.clone(),

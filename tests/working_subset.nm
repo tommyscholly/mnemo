@@ -83,7 +83,8 @@ main :: () { untyped_int := 1
     printf("%d\n", val2)
 
     arr_alloc := allocate_comptime(int, local, 2)
-    // arr_alloc[0] = 100
+    arr_alloc[0] = 100
+    arr_alloc[1] = 150
 
-    printf("%d\n", arr_alloc[0])
+    printf("[%d, %d]\n", arr_alloc[0], arr_alloc[1])
 }

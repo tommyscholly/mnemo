@@ -629,23 +629,34 @@ impl AstVisitor for AstToMIR<'_> {
                 let block = self.get_current_block();
                 block.stmts.push(stmt);
             }
-            StmtKind::Assign { name, expr } => {
-                let name_sym = name.node;
-                let local_id = self.symbol_table[&name_sym];
+            StmtKind::Assign { location, expr } => {
+                let location_val = self.visit_expr(location);
+                let place = location_val.place().unwrap();
                 self.in_assign_expr = true;
                 let rvalue = self.visit_expr(expr);
                 self.in_assign_expr = false;
-                let old_local = &self.get_current_function().locals[local_id];
-                let ty = old_local.ty.clone();
-                let new_local_id = self.new_local_with_ty(ty);
 
-                self.phi_functions_to_generate
-                    .entry(local_id)
-                    .or_default()
-                    .push(new_local_id);
+                match place.kind {
+                    mir::PlaceKind::Deref => {
+                        let local_id = place.local;
 
-                let stmt = mir::Statement::Assign(new_local_id, rvalue);
-                self.get_current_block().stmts.push(stmt);
+                        let old_local = &self.get_current_function().locals[local_id];
+                        let ty = old_local.ty.clone();
+                        let new_local_id = self.new_local_with_ty(ty);
+
+                        self.phi_functions_to_generate
+                            .entry(local_id)
+                            .or_default()
+                            .push(new_local_id);
+
+                        let stmt = mir::Statement::Assign(new_local_id, rvalue);
+                        self.get_current_block().stmts.push(stmt);
+                    }
+                    _ => {
+                        let stmt = mir::Statement::Store(place, rvalue);
+                        self.get_current_block().stmts.push(stmt);
+                    }
+                }
             }
             StmtKind::Call(Call {
                 callee,

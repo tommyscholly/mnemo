@@ -1190,18 +1190,31 @@ fn parse_stmt(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
             Ok(Spanned::new(StmtKind::Return(Some(expr)), span))
         }
         _ => {
-            let name = expect_identifier(tokens)?;
-            let start_span = name.span.clone();
+            // let name = expect_identifier(tokens)?;
+            let left_expr = parse_expr(ctx, tokens)?;
+            let start_span = left_expr.span.clone();
+
+            if let ExprKind::Call(call) = &left_expr.node {
+                let span = left_expr.span.clone();
+                return Ok(Spanned::new(StmtKind::Call(call.clone()), span));
+            }
 
             match peek_token(tokens) {
                 Some(Token::Colon) => {
+                    let ExprKind::Value(ValueKind::Ident(name)) = left_expr.node else {
+                        return Err(ParseError::new(
+                            ParseErrorKind::ExpectedIdentifier,
+                            left_expr.span,
+                        ));
+                    };
+
                     let ty = parse_type_annot(ctx, tokens)?;
                     expect_next(tokens, Token::Eq)?;
                     let expr = parse_expr(ctx, tokens)?;
                     let span = start_span.merge(&expr.span);
                     Ok(Spanned::new(
                         StmtKind::ValDec {
-                            name,
+                            name: Spanned::new(name, left_expr.span),
                             ty,
                             expr,
                             is_comptime: false,
@@ -1213,20 +1226,37 @@ fn parse_stmt(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
                     expect_next(tokens, Token::Eq)?;
                     let expr = parse_expr(ctx, tokens)?;
                     let span = start_span.merge(&expr.span);
-                    Ok(Spanned::new(StmtKind::Assign { name, expr }, span))
+                    Ok(Spanned::new(
+                        StmtKind::Assign {
+                            location: left_expr,
+                            expr,
+                        },
+                        span,
+                    ))
                 }
-                Some(Token::LParen) => {
-                    let expr = parse_identifier_expr(ctx, name.clone(), tokens)?;
-                    let ExprKind::Call(call) = expr.node else {
-                        unreachable!()
-                    };
-                    let span = expr.span;
-                    Ok(Spanned::new(StmtKind::Call(call), span))
+                // Some(Token::LParen) => {
+                //     let ExprKind::Value(ValueKind::Ident(name)) = left_expr.node else {
+                //         return Err(ParseError::new(
+                //             ParseErrorKind::ExpectedIdentifier,
+                //             left_expr.span,
+                //         ));
+                //     };
+                //     let name = Spanned::new(name, left_expr.span);
+                //
+                //     let expr = parse_identifier_expr(ctx, name, tokens)?;
+                //     let ExprKind::Call(call) = expr.node else {
+                //         unreachable!()
+                //     };
+                //     let span = expr.span;
+                //     Ok(Spanned::new(StmtKind::Call(call), span))
+                // }
+                t => {
+                    println!("here {t:?} {left_expr:?}");
+                    Err(ParseError::new(
+                        ParseErrorKind::ExpectedExpression,
+                        peek_span(tokens).unwrap_or(start_span),
+                    ))
                 }
-                _ => Err(ParseError::new(
-                    ParseErrorKind::ExpectedExpression,
-                    peek_span(tokens).unwrap_or(start_span),
-                )),
             }
         }
     }

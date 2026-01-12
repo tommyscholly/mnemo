@@ -176,14 +176,11 @@ impl<'ctx> Llvm<'ctx> {
         bb
     }
 
-    fn load_place(&self, place: &mir::Place) -> Result<BasicValueEnum<'ctx>> {
+    // returns ptr and ptr type
+    fn place_ptr(&self, place: &mir::Place) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)> {
         let local = self.function_locals.get(&place.local).unwrap();
-        let load = match &place.kind {
-            mir::PlaceKind::Deref => self
-                .builder
-                .build_load(local.ty, local.alloc, "load")
-                .unwrap()
-                .as_basic_value_enum(),
+        let (ptr, ty) = match &place.kind {
+            mir::PlaceKind::Deref => (local.alloc, local.ty),
             mir::PlaceKind::Field(idx, ty) => {
                 let field_alloca = self.builder.build_struct_gep(
                     local.ty,
@@ -194,14 +191,7 @@ impl<'ctx> Llvm<'ctx> {
 
                 let load_ty = Self::basic_type_to_llvm_basic_type(self.ctx(), ty);
 
-                self.builder
-                    .build_load(
-                        load_ty,
-                        field_alloca,
-                        format!("load_field_{}", idx).as_str(),
-                    )
-                    .unwrap()
-                    .as_basic_value_enum()
+                (field_alloca, load_ty)
             }
             mir::PlaceKind::Index(local_idx) => {
                 let pointee_ty = local.ty.into_array_type().get_element_type();
@@ -222,13 +212,17 @@ impl<'ctx> Llvm<'ctx> {
                     )
                 }?;
 
-                self.builder
-                    .build_load(pointee_ty, gep, "arr_index_load")?
-                    .as_basic_value_enum()
+                (gep, pointee_ty)
             }
         };
 
-        Ok(load)
+        Ok((ptr, ty))
+    }
+
+    fn load_place(&self, place: &mir::Place) -> Result<BasicValueEnum<'ctx>> {
+        let (ptr, ty) = self.place_ptr(place)?;
+        let load = self.builder.build_load(ty, ptr, "load")?;
+        Ok(load.as_basic_value_enum())
     }
 
     fn compile_operand(&self, operand: &mir::Operand) -> Result<BasicValueEnum<'ctx>> {
@@ -493,6 +487,11 @@ impl<'ctx> Llvm<'ctx> {
                     let call_value = call.try_as_basic_value().basic().unwrap();
                     self.builder.build_store(alloc, call_value)?;
                 }
+            }
+            mir::Statement::Store(place, rvalue) => {
+                let (place_ptr, _) = self.place_ptr(place)?;
+                let rvalue = self.compile_rvalue(rvalue, None, llvm_fn, ctx)?;
+                self.builder.build_store(place_ptr, rvalue)?;
             }
         }
 

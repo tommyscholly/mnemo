@@ -222,6 +222,7 @@ impl RValue {
 pub enum Statement {
     // This is in SSA form, so assigning defines a new local
     Assign(LocalId, RValue),
+    Store(Place, RValue),
     Phi(LocalId, Vec<LocalId>),
     Call {
         function_name: String,

@@ -275,7 +275,7 @@ pub enum StmtKind {
         is_comptime: bool,
     },
     Assign {
-        name: Spanned<Symbol>,
+        location: Expr,
         expr: Expr,
     },
     // a function call that is used in an assignment or declaration
