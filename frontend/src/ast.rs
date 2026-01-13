@@ -76,18 +76,17 @@ pub enum TypeKind {
     Unit,
     Variadic,
     Variant(Vec<VariantField>),
+    Range(Box<TypeKind>),
 }
 
-// impl TypeKind {
-//     pub fn assignable(&self) -> bool {
-//         match self {
-//             TypeKind::Alloc(AllocKind::Tuple(_), _) => false,
-//             TypeKind::Alloc(_, _) => true,
-//             TypeKind::Record(_) => true,
-//             _ => false,
-//         }
-//     }
-// }
+impl TypeKind {
+    pub fn is_iterable(&self) -> bool {
+        matches!(
+            self,
+            TypeKind::Alloc(AllocKind::Array(_, _), _) | TypeKind::Range(_)
+        )
+    }
+}
 
 pub type Type = Spanned<TypeKind>;
 
@@ -152,6 +151,11 @@ pub enum ExprKind {
         op: BinOp,
         lhs: Box<Expr>,
         rhs: Box<Expr>,
+    },
+    Range {
+        start: Box<Expr>,
+        end: Box<Expr>,
+        inclusive: bool,
     },
     FieldAccess(Box<Expr>, Symbol),
     TupleAccess(Box<Expr>, usize),
@@ -283,6 +287,12 @@ pub enum StmtKind {
     IfElse(Box<IfElse>),
     Match(Match),
     Return(Option<Expr>),
+    For {
+        binding: Pat,
+        // must be arrays or a range
+        iter: Expr,
+        body: Block,
+    },
 }
 
 pub type Stmt = Spanned<StmtKind>;

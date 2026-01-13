@@ -48,7 +48,9 @@ pub enum Keyword {
     Else,
     Extern,
     False,
+    For,
     If,
+    In,
     Int,
     Match,
     Region,
@@ -71,7 +73,9 @@ impl TryFrom<&str> for Keyword {
             "else" => Ok(Keyword::Else),
             "extern" => Ok(Keyword::Extern),
             "false" => Ok(Keyword::False),
+            "for" => Ok(Keyword::For),
             "if" => Ok(Keyword::If),
+            "in" => Ok(Keyword::In),
             "int" => Ok(Keyword::Int),
             "match" => Ok(Keyword::Match),
             "region" => Ok(Keyword::Region),
@@ -293,6 +297,9 @@ impl<'a, T: Iterator<Item = LexItem>> Lexer<'a, T> {
                         Token::BinOp(BinOp::Lt),
                         Token::BinOp(BinOp::LtEq)
                     )
+                }
+                '!' => {
+                    handle_operator!(self, '!', '=', todo!(), Token::BinOp(BinOp::NEq))
                 }
                 '-' => handle_operator!(self, '-', '>', Token::BinOp(BinOp::Sub), Token::Arrow),
                 ' ' | '\t' | '\n' | '\r' => {

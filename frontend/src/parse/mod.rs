@@ -27,6 +27,7 @@ pub enum ParseErrorKind {
     ExpectedPattern,
     ExpectedExpression,
     ExpectedToken(Token),
+    MalformedRange,
     UnexpectedEOF,
 }
 
@@ -456,7 +457,34 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
     };
 
     match token.node {
-        Token::Int(i) => Ok(Spanned::new(ExprKind::Value(ValueKind::Int(i)), token.span)),
+        Token::Int(i) => {
+            if let Some(Token::DotDot) = peek_token(tokens) {
+                expect_next(tokens, Token::DotDot)?;
+
+                let end_range = tokens.pop_front().unwrap();
+                let Token::Int(end_range_int) = end_range.node else {
+                    return Err(ParseError::new(ParseErrorKind::MalformedRange, token.span));
+                };
+
+                let total_span = token.span.merge(&end_range.span);
+                Ok(Spanned::new(
+                    ExprKind::Range {
+                        start: Box::new(Spanned::new(
+                            ExprKind::Value(ValueKind::Int(i)),
+                            token.span,
+                        )),
+                        end: Box::new(Spanned::new(
+                            ExprKind::Value(ValueKind::Int(end_range_int)),
+                            end_range.span,
+                        )),
+                        inclusive: false,
+                    },
+                    total_span,
+                ))
+            } else {
+                Ok(Spanned::new(ExprKind::Value(ValueKind::Int(i)), token.span))
+            }
+        }
         Token::Keyword(Keyword::True) => Ok(Spanned::new(
             ExprKind::Value(ValueKind::Bool(true)),
             token.span,
@@ -1312,8 +1340,27 @@ fn parse_match(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResul
     ))
 }
 
+fn parse_for(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
+    let for_span = expect_next(tokens, Token::Keyword(Keyword::For))?;
+    let in_pat = parse_pat(ctx, tokens)?;
+    expect_next(tokens, Token::Keyword(Keyword::In))?;
+    let in_expr = parse_expr(ctx, tokens)?;
+    let in_block = parse_block(ctx, tokens)?;
+
+    let span = for_span.merge(&in_block.span);
+    Ok(Spanned::new(
+        StmtKind::For {
+            binding: in_pat,
+            iter: in_expr,
+            body: in_block,
+        },
+        span,
+    ))
+}
+
 fn parse_stmt(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult<Stmt> {
     match peek_token(tokens) {
+        Some(Token::Keyword(Keyword::For)) => parse_for(ctx, tokens),
         Some(Token::Keyword(Keyword::If)) => parse_ifelse(ctx, tokens),
         Some(Token::Keyword(Keyword::Match)) => parse_match(ctx, tokens),
         Some(Token::Keyword(Keyword::Return)) => {

@@ -1,5 +1,6 @@
 mod tests;
 
+use crate::BinOp;
 use crate::Spanned;
 use crate::ast::*;
 use crate::ctx::{Ctx, Symbol};
@@ -84,6 +85,26 @@ impl<'a> AstToMIR<'a> {
             .get_mut(&self.current_function.unwrap())
             .unwrap()
             .blocks[self.current_block - 1]
+    }
+
+    fn add_stmt(&mut self, stmt: mir::Statement) {
+        self.get_current_block().stmts.push(stmt);
+    }
+
+    fn add_terminator(&mut self, terminator: mir::Terminator) {
+        self.get_current_block().terminator = terminator;
+    }
+
+    fn add_terminator_at(&mut self, terminator: mir::Terminator, block_id: usize) {
+        self.get_block(block_id).terminator = terminator;
+    }
+
+    fn new_block(&mut self) -> usize {
+        let block_id = self.current_block + 1;
+        self.current_block += 1;
+        let block = mir::BasicBlock::new(block_id);
+        self.get_current_function().blocks.push(block);
+        block_id
     }
 
     fn get_block(&mut self, block_id: mir::BlockId) -> &mut mir::BasicBlock {
@@ -533,9 +554,7 @@ impl AstVisitor for AstToMIR<'_> {
                     }
                 } else {
                     for elem in elements {
-                        print!("elem {elem:?} -> ");
                         let elem = self.visit_expr(elem);
-                        println!("elem rvalue {elem:?}");
                         let (op, ty) = match elem {
                             mir::RValue::Use(mir::Operand::Copy(place)) => {
                                 let local_ty = self.local_types.get(&place.local).unwrap();
@@ -573,8 +592,6 @@ impl AstVisitor for AstToMIR<'_> {
                         mir::RValue::Alloc(mir::AllocKind::Tuple(tys), ops)
                     }
                     AllocKind::Record(fields) => {
-                        println!("record {fields:?}\n\t{elem_types:?}");
-
                         mir::RValue::Alloc(mir::AllocKind::Record(elem_types), ops)
                     }
                     AllocKind::Variant(variant_name) => {
@@ -640,6 +657,11 @@ impl AstVisitor for AstToMIR<'_> {
                     mir::PlaceKind::Field(index, field_ty),
                 )))
             }
+            ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => todo!(),
         }
     }
 
@@ -870,6 +892,80 @@ impl AstVisitor for AstToMIR<'_> {
 
                 let ret = mir::Terminator::Return(local);
                 self.get_block(self.current_block).terminator = ret;
+            }
+            StmtKind::For {
+                binding,
+                iter,
+                body,
+            } => {
+                match iter.node {
+                    ExprKind::Range {
+                        start,
+                        end,
+                        inclusive,
+                    } => {
+                        let start = self.visit_expr(*start);
+                        let end = self.visit_expr(*end);
+
+                        let counter_local = self.new_local(&TypeKind::Int);
+                        self.add_stmt(mir::Statement::Assign(counter_local, start));
+                        let counter_place = mir::Place::new(counter_local, mir::PlaceKind::Deref);
+                        self.bind_pattern(&binding, counter_local, &TypeKind::Int);
+
+                        let end_local = self.new_local(&TypeKind::Int);
+                        self.add_stmt(mir::Statement::Assign(end_local, end));
+                        let end_place = mir::Place::new(end_local, mir::PlaceKind::Deref);
+
+                        let header_block_id = self.new_block();
+                        self.add_terminator_at(
+                            mir::Terminator::Br(header_block_id),
+                            header_block_id - 1,
+                        );
+
+                        let cond_local = self.new_local(&TypeKind::Bool);
+                        self.add_stmt(mir::Statement::Assign(
+                            cond_local,
+                            mir::RValue::BinOp(
+                                if inclusive { BinOp::LtEq } else { BinOp::Lt },
+                                mir::Operand::Copy(counter_place.clone()),
+                                mir::Operand::Copy(end_place),
+                            ),
+                        ));
+
+                        let exit_id = self.new_block();
+
+                        let entry_block_id = self.current_block + 1;
+                        self.add_terminator_at(
+                            mir::Terminator::BrIf(cond_local, entry_block_id, exit_id),
+                            header_block_id,
+                        );
+
+                        self.visit_block(body);
+                        self.add_stmt(mir::Statement::Assign(
+                            counter_local,
+                            mir::RValue::BinOp(
+                                BinOp::Add,
+                                mir::Operand::Copy(counter_place),
+                                mir::Operand::Constant(mir::Constant::Int(1)),
+                            ),
+                        ));
+                        self.add_terminator(mir::Terminator::Br(header_block_id));
+                        let rest_block = self.new_block();
+                        self.add_terminator_at(mir::Terminator::Br(rest_block), exit_id);
+                    }
+                    ExprKind::Allocation {
+                        kind,
+                        elements: _,
+                        default_elem: _,
+                        region: _,
+                    } => {
+                        let AllocKind::Array(_ty, _len) = kind else {
+                            panic!("expected array allocation");
+                        };
+                        todo!()
+                    }
+                    _ => panic!("unimplemented for loop"),
+                };
             }
         }
     }

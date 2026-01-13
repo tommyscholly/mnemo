@@ -87,4 +87,13 @@ main :: () {
     printf("record_update %s\n", record_update.z)
     record_update.z = "tttttttttt"
     printf("record_update %s\n", record_update.z)
+
+    for i in 0..10 {
+        printf("%d", i)
+        if i != 9 {
+            printf(", ")
+        }
+    }
+
+    printf("\n")
 }

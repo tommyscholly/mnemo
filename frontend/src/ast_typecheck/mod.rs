@@ -51,6 +51,7 @@ pub enum TypeErrorKind {
     MissingMainFunction,
     ExpectedArrayIndex,
     ExpectedVariant,
+    ExpectedIterable,
     TypeAnnotationRequired,
     ExpectedType {
         expected: TypeKind,
@@ -359,6 +360,22 @@ impl<'a> Analyzer<'a> {
                     expr.span.clone(),
                 )
             }
+            ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let start_sub = self.substitute_expr(start, subs);
+                let end_sub = self.substitute_expr(end, subs);
+
+                let range_expr = ExprKind::Range {
+                    start: Box::new(start_sub),
+                    end: Box::new(end_sub),
+                    inclusive: *inclusive,
+                };
+
+                Spanned::new(range_expr, expr.span.clone())
+            }
         }
     }
 
@@ -429,6 +446,21 @@ impl<'a> Analyzer<'a> {
                 }),
                 stmt.span.clone(),
             ),
+            StmtKind::For {
+                binding,
+                iter,
+                body,
+            } => {
+                let iter_sub = self.substitute_expr(iter, subs);
+                let body_sub = self.substitute_block(body, subs);
+                let for_stmt = StmtKind::For {
+                    binding: binding.clone(),
+                    iter: iter_sub,
+                    body: body_sub,
+                };
+
+                Spanned::new(for_stmt, stmt.span.clone())
+            }
         }
     }
 
@@ -793,6 +825,18 @@ impl<'a> Analyzer<'a> {
                 self.type_of_comptime_value(cv),
                 cv.clone(),
             )),
+            ExprKind::Range {
+                start,
+                end,
+                inclusive: _,
+            } => {
+                let start_tv = self.analyze_expr(start)?;
+                let end_tv = self.analyze_expr(end)?;
+
+                self.structural_typecheck(&start_tv.ty, &end_tv.ty, start.span.clone())?;
+
+                Ok(TypedValue::runtime(TypeKind::Range(Box::new(start_tv.ty))))
+            }
         }
     }
 
@@ -1374,6 +1418,35 @@ impl<'a> Analyzer<'a> {
                 if let Some(expr) = expr {
                     self.analyze_expr(expr)?;
                 }
+                Ok(())
+            }
+            StmtKind::For {
+                binding,
+                iter,
+                body,
+            } => {
+                let iter_val = self.analyze_expr(iter)?;
+                if !iter_val.ty.is_iterable() {
+                    return Err(TypeError::new(
+                        TypeErrorKind::ExpectedIterable,
+                        iter.span.clone(),
+                    ));
+                }
+
+                let bind_val_ty = match iter_val.ty {
+                    TypeKind::Alloc(AllocKind::Array(ty, _), _) => ty,
+                    TypeKind::Range(ty) => ty,
+                    _ => {
+                        return Err(TypeError::new(
+                            TypeErrorKind::ExpectedIterable,
+                            iter.span.clone(),
+                        ));
+                    }
+                };
+
+                self.bind_pattern(binding, &Spanned::new(*bind_val_ty, binding.span.clone()));
+
+                self.analyze_block(body)?;
                 Ok(())
             }
         }
