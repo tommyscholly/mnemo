@@ -14,7 +14,7 @@ use inkwell::targets::{
 };
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
-use inkwell::{AddressSpace, OptimizationLevel};
+use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 
 use crate::Compiler;
 
@@ -260,11 +260,56 @@ impl<'ctx> Llvm<'ctx> {
                 let lhs = self.compile_operand(lhs)?;
                 let rhs = self.compile_operand(rhs)?;
 
+                // TOOD: we are assuming ints here
                 match binop {
                     BinOp::Add => self
                         .builder
-                        // TOOD: we are assuming ints here
                         .build_int_add(lhs.into_int_value(), rhs.into_int_value(), "add")
+                        .unwrap()
+                        .as_basic_value_enum(),
+                    BinOp::Sub => self
+                        .builder
+                        .build_int_sub(lhs.into_int_value(), rhs.into_int_value(), "sub")
+                        .unwrap()
+                        .as_basic_value_enum(),
+                    BinOp::Mul => self
+                        .builder
+                        .build_int_mul(lhs.into_int_value(), rhs.into_int_value(), "mul")
+                        .unwrap()
+                        .as_basic_value_enum(),
+                    BinOp::Div => self
+                        .builder
+                        .build_int_unsigned_div(lhs.into_int_value(), rhs.into_int_value(), "div")
+                        .unwrap()
+                        .as_basic_value_enum(),
+                    BinOp::Lt => self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::SLT,
+                            lhs.into_int_value(),
+                            rhs.into_int_value(),
+                            "lt",
+                        )
+                        .unwrap()
+                        .as_basic_value_enum(),
+                    BinOp::LtEq => self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::SLE,
+                            lhs.into_int_value(),
+                            rhs.into_int_value(),
+                            "lteq",
+                        )
+                        .unwrap()
+                        .as_basic_value_enum(),
+                    BinOp::NEq => self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            lhs.into_int_value(),
+                            rhs.into_int_value(),
+                            "neq",
+                        )
                         .unwrap()
                         .as_basic_value_enum(),
                     _ => todo!(),
@@ -427,7 +472,6 @@ impl<'ctx> Llvm<'ctx> {
                         .build_global_string_ptr(s, format!("str_{}", s).as_str())?
                         .as_pointer_value()
                         .as_basic_value_enum(),
-                    a => panic!("unimplemented alloc kind {:?}", a),
                 }
             }
         };

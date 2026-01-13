@@ -120,6 +120,7 @@ pub enum Token {
     RParen,
     SemiColon,
     String(String),
+    Not,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -299,7 +300,7 @@ impl<'a, T: Iterator<Item = LexItem>> Lexer<'a, T> {
                     )
                 }
                 '!' => {
-                    handle_operator!(self, '!', '=', todo!(), Token::BinOp(BinOp::NEq))
+                    handle_operator!(self, '!', '=', Token::Not, Token::BinOp(BinOp::NEq))
                 }
                 '-' => handle_operator!(self, '-', '>', Token::BinOp(BinOp::Sub), Token::Arrow),
                 ' ' | '\t' | '\n' | '\r' => {

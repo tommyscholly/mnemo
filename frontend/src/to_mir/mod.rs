@@ -91,6 +91,10 @@ impl<'a> AstToMIR<'a> {
         self.get_current_block().stmts.push(stmt);
     }
 
+    fn add_stmt_at(&mut self, stmt: mir::Statement, block_id: usize) {
+        self.get_block(block_id).stmts.push(stmt);
+    }
+
     fn add_terminator(&mut self, terminator: mir::Terminator) {
         self.get_current_block().terminator = terminator;
     }
@@ -591,7 +595,7 @@ impl AstVisitor for AstToMIR<'_> {
 
                         mir::RValue::Alloc(mir::AllocKind::Tuple(tys), ops)
                     }
-                    AllocKind::Record(fields) => {
+                    AllocKind::Record(_) => {
                         mir::RValue::Alloc(mir::AllocKind::Record(elem_types), ops)
                     }
                     AllocKind::Variant(variant_name) => {
@@ -658,10 +662,10 @@ impl AstVisitor for AstToMIR<'_> {
                 )))
             }
             ExprKind::Range {
-                start,
-                end,
-                inclusive,
-            } => todo!(),
+                start: _,
+                end: _,
+                inclusive: _,
+            } => panic!("how do we represent ranges in the mir?"),
         }
     }
 
@@ -898,7 +902,7 @@ impl AstVisitor for AstToMIR<'_> {
                 iter,
                 body,
             } => {
-                match iter.node {
+                match iter.node.clone() {
                     ExprKind::Range {
                         start,
                         end,
@@ -906,6 +910,12 @@ impl AstVisitor for AstToMIR<'_> {
                     } => {
                         let start = self.visit_expr(*start);
                         let end = self.visit_expr(*end);
+
+                        let local_load_block = self.new_block();
+                        self.add_terminator_at(
+                            mir::Terminator::Br(local_load_block),
+                            local_load_block - 1,
+                        );
 
                         let counter_local = self.new_local(&TypeKind::Int);
                         self.add_stmt(mir::Statement::Assign(counter_local, start));
@@ -959,10 +969,108 @@ impl AstVisitor for AstToMIR<'_> {
                         default_elem: _,
                         region: _,
                     } => {
-                        let AllocKind::Array(_ty, _len) = kind else {
+                        let AllocKind::Array(ty, len) = kind.clone() else {
                             panic!("expected array allocation");
                         };
-                        todo!()
+
+                        let len_val = match *len {
+                            ComptimeValue::Int(i) => {
+                                if i == 0 {
+                                    return;
+                                }
+
+                                mir::RValue::Use(mir::Operand::Constant(mir::Constant::Int(
+                                    i as i32,
+                                )))
+                            }
+                            ComptimeValue::Ident(_) => {
+                                unreachable!()
+                            }
+                            _ => panic!("unimplemented comptime len"),
+                        };
+
+                        let local_load_block = self.new_block();
+                        self.add_terminator_at(
+                            mir::Terminator::Br(local_load_block),
+                            local_load_block - 1,
+                        );
+
+                        let array_load = self.visit_expr(iter);
+                        let array_local = self.new_local(&TypeKind::Alloc(kind, Region::Local));
+                        self.add_stmt(mir::Statement::Assign(array_local, array_load));
+
+                        let len_local = self.new_local(&TypeKind::Int);
+                        self.add_stmt(mir::Statement::Assign(len_local, len_val));
+
+                        let idx_local = self.new_local(&TypeKind::Int);
+                        self.add_stmt(mir::Statement::Assign(
+                            idx_local,
+                            mir::RValue::Use(mir::Operand::Constant(mir::Constant::Int(0))),
+                        ));
+
+                        let header_block_id = self.new_block();
+                        self.add_terminator_at(
+                            mir::Terminator::Br(header_block_id),
+                            header_block_id - 1,
+                        );
+
+                        let cond_local = self.new_local(&TypeKind::Bool);
+                        self.add_stmt(mir::Statement::Assign(
+                            cond_local,
+                            mir::RValue::BinOp(
+                                BinOp::Lt,
+                                mir::Operand::Copy(mir::Place::new(
+                                    idx_local,
+                                    mir::PlaceKind::Deref,
+                                )),
+                                mir::Operand::Copy(mir::Place::new(
+                                    len_local,
+                                    mir::PlaceKind::Deref,
+                                )),
+                            ),
+                        ));
+
+                        let value_load_block = self.new_block();
+                        let exit_block = self.new_block();
+
+                        self.add_terminator_at(
+                            mir::Terminator::BrIf(cond_local, value_load_block, exit_block),
+                            header_block_id,
+                        );
+
+                        let value_local = self.new_local(&ty);
+                        self.add_stmt_at(
+                            mir::Statement::Assign(
+                                value_local,
+                                mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
+                                    array_local,
+                                    mir::PlaceKind::Index(idx_local),
+                                ))),
+                            ),
+                            value_load_block,
+                        );
+                        self.bind_pattern(&binding, value_local, &ty);
+                        self.add_terminator_at(
+                            mir::Terminator::Br(exit_block + 1),
+                            value_load_block,
+                        );
+
+                        self.visit_block(body);
+
+                        self.add_stmt(mir::Statement::Assign(
+                            idx_local,
+                            mir::RValue::BinOp(
+                                BinOp::Add,
+                                mir::Operand::Copy(mir::Place::new(
+                                    idx_local,
+                                    mir::PlaceKind::Deref,
+                                )),
+                                mir::Operand::Constant(mir::Constant::Int(1)),
+                            ),
+                        ));
+                        self.add_terminator(mir::Terminator::Br(header_block_id));
+                        let rest_block = self.new_block();
+                        self.add_terminator_at(mir::Terminator::Br(rest_block), exit_block);
                     }
                     _ => panic!("unimplemented for loop"),
                 };

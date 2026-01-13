@@ -94,6 +94,14 @@ main :: () {
             printf(", ")
         }
     }
+    printf("\n")
+
+    for val in [1, 2, 3, 4, 5] {
+        printf("%d", val)
+        if val != 5 {
+            printf(", ")
+        }
+    }
 
     printf("\n")
 }

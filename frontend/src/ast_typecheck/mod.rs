@@ -720,10 +720,13 @@ impl<'a> Analyzer<'a> {
                         let mut filled_fields = Vec::new();
                         for (field, elem_val) in fields.iter_mut().zip(elem_vals.into_iter()) {
                             let elem_ty = Type::synthetic(elem_val.ty);
-                            filled_fields.push(RecordField {
+                            let filled_field = RecordField {
                                 name: field.name,
                                 ty: Some(elem_ty),
-                            });
+                            };
+
+                            *field = filled_field.clone();
+                            filled_fields.push(filled_field);
                         }
                         return Ok(TypedValue::runtime(TypeKind::Record(filled_fields)));
                     }
