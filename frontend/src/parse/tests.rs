@@ -890,3 +890,165 @@ fn parse_variadic_in_procedure() {
     let last_param = &sig.node.params.params[1];
     assert_eq!(last_param.ty.node, TypeKind::Variadic);
 }
+
+#[test]
+fn parse_for_loop_with_array() {
+    let decs = expect_parse_ok(
+        "foo :: () {
+            for x in [1, 2, 3] {
+                println(x)
+            }
+        }",
+        1,
+    );
+    assert_decl_is_procedure(&decs[0], 0, 0);
+
+    let DeclKind::Procedure { block, .. } = &decs[0].node else {
+        panic!("expected procedure");
+    };
+    assert_eq!(block.node.stmts.len(), 1);
+
+    let StmtKind::For {
+        binding,
+        iter,
+        body,
+    } = &block.node.stmts[0].node
+    else {
+        panic!("expected for loop");
+    };
+    assert!(matches!(binding.node, PatKind::Symbol(_)));
+    assert!(matches!(
+        iter.node,
+        ExprKind::Allocation {
+            kind: AllocKind::Array(_, _),
+            ..
+        }
+    ));
+    assert_eq!(body.node.stmts.len(), 1);
+}
+
+#[test]
+fn parse_for_loop_with_range() {
+    let decs = expect_parse_ok(
+        "foo :: () {
+            for i in 0..10 {
+                println(i)
+            }
+        }",
+        1,
+    );
+    assert_decl_is_procedure(&decs[0], 0, 0);
+
+    let DeclKind::Procedure { block, .. } = &decs[0].node else {
+        panic!("expected procedure");
+    };
+    assert_eq!(block.node.stmts.len(), 1);
+
+    let StmtKind::For {
+        binding,
+        iter,
+        body,
+    } = &block.node.stmts[0].node
+    else {
+        panic!("expected for loop");
+    };
+    assert!(matches!(binding.node, PatKind::Symbol(_)));
+    assert!(matches!(iter.node, ExprKind::Range { .. }));
+    assert_eq!(body.node.stmts.len(), 1);
+}
+
+#[test]
+fn parse_for_loop_with_wildcard() {
+    let decs = expect_parse_ok(
+        "foo :: () {
+            for _ in [1, 2, 3] {
+                do_something()
+            }
+        }",
+        1,
+    );
+    assert_decl_is_procedure(&decs[0], 0, 0);
+
+    let DeclKind::Procedure { block, .. } = &decs[0].node else {
+        panic!("expected procedure");
+    };
+    assert_eq!(block.node.stmts.len(), 1);
+
+    let StmtKind::For { binding, .. } = &block.node.stmts[0].node else {
+        panic!("expected for loop");
+    };
+    assert!(matches!(binding.node, PatKind::Wildcard));
+}
+
+#[test]
+fn parse_for_loop_nested() {
+    let decs = expect_parse_ok(
+        "foo :: () {
+            for i in 0..3 {
+                for j in 0..2 {
+                    println(i + j)
+                }
+            }
+        }",
+        1,
+    );
+    assert_decl_is_procedure(&decs[0], 0, 0);
+
+    let DeclKind::Procedure { block, .. } = &decs[0].node else {
+        panic!("expected procedure");
+    };
+    assert_eq!(block.node.stmts.len(), 1);
+
+    let StmtKind::For {
+        body: outer_body, ..
+    } = &block.node.stmts[0].node
+    else {
+        panic!("expected for loop");
+    };
+    assert_eq!(outer_body.node.stmts.len(), 1);
+
+    let StmtKind::For { .. } = &outer_body.node.stmts[0].node else {
+        panic!("expected nested for loop");
+    };
+}
+
+#[test]
+fn parse_for_loop_empty_body() {
+    let decs = expect_parse_ok(
+        "foo :: () {
+            for x in [1, 2, 3] { }
+        }",
+        1,
+    );
+    assert_decl_is_procedure(&decs[0], 0, 0);
+
+    let DeclKind::Procedure { block, .. } = &decs[0].node else {
+        panic!("expected procedure");
+    };
+    assert_eq!(block.node.stmts.len(), 1);
+
+    let StmtKind::For { body, .. } = &block.node.stmts[0].node else {
+        panic!("expected for loop");
+    };
+    assert!(body.node.stmts.is_empty());
+}
+
+#[test]
+fn parse_for_loop_missing_in_keyword() {
+    expect_err_kind(
+        "foo :: () {
+            for x [1, 2, 3] { }
+        }",
+        ParseErrorKind::ExpectedToken(Token::Keyword(Keyword::In)),
+    );
+}
+
+#[test]
+fn parse_for_loop_missing_body() {
+    expect_err_kind(
+        "foo :: () {
+            for x in [1, 2, 3]
+        }",
+        ParseErrorKind::ExpectedToken(Token::LBrace),
+    );
+}

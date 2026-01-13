@@ -112,10 +112,7 @@ pub enum AllocKind {
 
 impl AllocKind {
     pub fn fill_type(&mut self, ty: TypeKind) {
-        match self {
-            AllocKind::Array(ty_, _) => *ty_ = Box::new(ty),
-            _ => {}
-        }
+        if let AllocKind::Array(ty_, _) = self { *ty_ = Box::new(ty) }
     }
 }
 
