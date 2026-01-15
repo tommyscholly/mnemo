@@ -235,7 +235,7 @@ impl<'a> Analyzer<'a> {
         match ty {
             TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap().ty,
             TypeKind::Ptr(inner, region) => {
-                TypeKind::Ptr(Box::new(self.substitute_type(inner, subs)), region.clone())
+                TypeKind::Ptr(Box::new(self.substitute_type(inner, subs)), *region)
             }
             TypeKind::Alloc(kind, region) => {
                 TypeKind::Alloc(self.substitute_alloc_kind(kind, subs), *region)
@@ -968,10 +968,9 @@ impl<'a> Analyzer<'a> {
     fn resolve_type_with_subs(&self, ty: &TypeKind, subs: &HashMap<Symbol, TypeKind>) -> TypeKind {
         match ty {
             TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap(),
-            TypeKind::Ptr(inner, region) => TypeKind::Ptr(
-                Box::new(self.resolve_type_with_subs(inner, subs)),
-                region.clone(),
-            ),
+            TypeKind::Ptr(inner, region) => {
+                TypeKind::Ptr(Box::new(self.resolve_type_with_subs(inner, subs)), *region)
+            }
             TypeKind::Alloc(kind, region) => TypeKind::Alloc(kind.clone(), *region),
             TypeKind::Fn(sig) => {
                 let new_params: Vec<_> = sig

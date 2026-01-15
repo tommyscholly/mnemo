@@ -5,7 +5,7 @@ use crate::Spanned;
 use crate::ast::*;
 use crate::ctx::{Ctx, Symbol};
 use crate::mir::{self, Function};
-use crate::scope::{ScopeId, ScopeKind, ScopeTree};
+use crate::scope::{ScopeId, ScopeTree};
 
 use crate::AstVisitor;
 
@@ -57,16 +57,11 @@ impl<'a> AstToMIR<'a> {
         let region_id = self.next_region_id;
         self.next_region_id += 1;
         self.scope_to_region.insert(scope_id, region_id);
-        let scope = self.scope_tree.get_scope(scope_id).unwrap();
-        let name = match &scope.kind {
-            ScopeKind::Region(name) => name.map(|s| self.ctx.resolve(s).to_string()),
-            _ => None,
-        };
         self.get_current_function()
             .region_params
             .push(mir::RegionInfo {
                 id: region_id,
-                name,
+                name: None,
             });
         region_id
     }
@@ -89,17 +84,6 @@ impl<'a> AstToMIR<'a> {
                 }
                 current_parent = self.scope_tree.parent_of(parent_scope_id);
             }
-        }
-    }
-
-    fn emit_region_start(&mut self, scope_id: ScopeId) {
-        let region_id = self.get_or_create_region(scope_id);
-        self.add_stmt(mir::Statement::RegionStart(region_id));
-    }
-
-    fn emit_region_end(&mut self, scope_id: ScopeId) {
-        if let Some(&region_id) = self.scope_to_region.get(&scope_id) {
-            self.add_stmt(mir::Statement::RegionEnd(region_id));
         }
     }
 
@@ -1211,7 +1195,7 @@ impl AstVisitor for AstToMIR<'_> {
                     }
                 }
 
-                self.scope_tree.enter(ScopeKind::Function(name_sym));
+                self.scope_tree.enter();
 
                 self.visit_block(block);
 
