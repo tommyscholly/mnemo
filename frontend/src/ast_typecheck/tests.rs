@@ -1,4 +1,3 @@
-#![cfg(test)]
 
 use super::*;
 
@@ -50,21 +49,21 @@ fn test_typecheck_infers_val_type() {
 #[test]
 fn test_typecheck_binop_expression() {
     let src = "foo :: (x: int, y: int): int { z : int = x + y }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_typecheck_assignment() {
     let src = "foo :: (x: int): int { y : int = x \n y = x + 1 }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_typecheck_if_else() {
     let src = "foo :: (x: int): int { if x { y : int = 1 } else { z : int = 2 } }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
@@ -85,7 +84,7 @@ fn test_typecheck_constant() {
 #[test]
 fn test_typecheck_function_call() {
     let src = "bar :: (x: int): int { y : int = 1 } \n foo :: (a: int): int { bar(1) }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
@@ -93,14 +92,14 @@ fn test_typecheck_function_call() {
 fn test_typecheck_function_call_with_return() {
     let src =
         "bar :: (x: int): int { y : int = 1 } \n foo :: (a: int): int { result : int = bar(1) }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_typecheck_error_unknown_symbol_in_ident() {
     let src = "foo :: (): int { y : int = unknown }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(matches!(err.kind, TypeErrorKind::UnknownSymbol(_)));
@@ -109,7 +108,7 @@ fn test_typecheck_error_unknown_symbol_in_ident() {
 #[test]
 fn test_typecheck_error_unknown_symbol_in_assignment() {
     let src = "foo :: (): int { y : int = 1 \n y = unknown }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(matches!(err.kind, TypeErrorKind::UnknownSymbol(_)));
@@ -118,7 +117,7 @@ fn test_typecheck_error_unknown_symbol_in_assignment() {
 #[test]
 fn test_typecheck_error_unknown_function() {
     let src = "foo :: (): int { unknown_func(1) }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_err());
 
     let err = result.unwrap_err();
@@ -128,14 +127,14 @@ fn test_typecheck_error_unknown_function() {
 #[test]
 fn test_typecheck_nested_if() {
     let src = "foo :: (x: int): int { if 1 { if 1 { y : int = 1 } } }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_typecheck_multiple_params() {
     let src = "foo :: (a: int, b: int, c: int): int { sum : int = 1 + 2 + 3 }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
@@ -195,7 +194,7 @@ fn test_typecheck_constant_with_binop() {
 #[test]
 fn test_typecheck_empty_procedure() {
     let src = "foo :: () {}";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
@@ -235,28 +234,28 @@ fn test_typecheck_val_dec_infers_int_from_literal() {
 #[test]
 fn test_typecheck_multiple_val_decs() {
     let src = "foo :: (): int { a : int = 1 \n b : int = 2 \n c : int = 3 }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_typecheck_val_dec_uses_previous_val() {
     let src = "foo :: (): int { a : int = 1 \n b : int = a }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_typecheck_assignment_to_declared_var() {
     let src = "foo :: (): int { a : int = 1 \n a = 2 }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_typecheck_error_assignment_to_undeclared_var() {
     let src = "foo :: (): int { a = 1 }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_err());
 
     let err = result.unwrap_err();
@@ -314,21 +313,21 @@ fn test_typecheck_variant_type_with_args() {
 #[test]
 fn test_typecheck_subtyping_record() {
     let src = "foo :: () { x : { a: int } = { a := 1, b := 2 } }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_comptime_constant_evaluation() {
     let src = "MY_CONST :: 1 + 2 * 3";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_comptime_bool_evaluation() {
     let src = "TRUE_CONST :: true and false";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
@@ -436,42 +435,42 @@ fn test_monomorphization_basic() {
 #[test]
 fn test_typecheck_for_loop_array() {
     let src = "foo :: () { for x in [1, 2, 3] { y : int = x } }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_typecheck_for_loop_range() {
     let src = "foo :: () { for i in 0..10 { y : int = i } }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_typecheck_for_loop_with_call_in_body() {
     let src = "foo :: () { for x in [1, 2, 3] { y : int = x } }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_typecheck_for_loop_nested() {
     let src = "foo :: () { for i in 0..3 { for j in 0..2 { sum : int = i + j } } }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_typecheck_for_loop_binding_shadows() {
     let src = "foo :: (x: int) { for x in [1, 2, 3] { y : int = x } }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_typecheck_for_loop_error_non_iterable() {
     let src = "foo :: () { for x in 5 { } }";
-    let (_ctx, result, module) = typecheck_src(src);
+    let (_ctx, result, _module) = typecheck_src(src);
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(matches!(err.kind, TypeErrorKind::ExpectedIterable));

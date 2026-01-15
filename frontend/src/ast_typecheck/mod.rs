@@ -1,5 +1,3 @@
-mod tests;
-
 use std::collections::HashMap;
 
 use crate::{
@@ -97,7 +95,7 @@ pub enum TypeErrorKind {
     InvalidComptimeOperation,
 }
 
-pub type TypecheckResult<T> = Result<T, TypeError>;
+pub type TypecheckResult<T> = Result<T, Box<TypeError>>;
 
 #[derive(Debug, Clone)]
 struct ComptimeArg {
@@ -168,7 +166,7 @@ impl<'a> Analyzer<'a> {
         op: &BinOp,
         lhs: &ComptimeValue,
         rhs: &ComptimeValue,
-    ) -> Result<ComptimeValue, TypeError> {
+    ) -> TypecheckResult<ComptimeValue> {
         match (op, lhs, rhs) {
             (BinOp::Add, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
                 Ok(ComptimeValue::Int(*a + *b))
@@ -181,20 +179,14 @@ impl<'a> Analyzer<'a> {
             }
             (BinOp::Div, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
                 if *b == 0 {
-                    Err(TypeError::new(
-                        TypeErrorKind::InvalidComptimeOperation,
-                        DUMMY_SPAN,
-                    ))
+                    Err(TypeError::new(TypeErrorKind::InvalidComptimeOperation, DUMMY_SPAN).into())
                 } else {
                     Ok(ComptimeValue::Int(*a / *b))
                 }
             }
             (BinOp::Mod, ComptimeValue::Int(a), ComptimeValue::Int(b)) => {
                 if *b == 0 {
-                    Err(TypeError::new(
-                        TypeErrorKind::InvalidComptimeOperation,
-                        DUMMY_SPAN,
-                    ))
+                    Err(TypeError::new(TypeErrorKind::InvalidComptimeOperation, DUMMY_SPAN).into())
                 } else {
                     Ok(ComptimeValue::Int(*a % *b))
                 }
@@ -223,10 +215,7 @@ impl<'a> Analyzer<'a> {
             (BinOp::Or, ComptimeValue::Bool(a), ComptimeValue::Bool(b)) => {
                 Ok(ComptimeValue::Bool(*a || *b))
             }
-            _ => Err(TypeError::new(
-                TypeErrorKind::InvalidComptimeOperation,
-                DUMMY_SPAN,
-            )),
+            _ => Err(TypeError::new(TypeErrorKind::InvalidComptimeOperation, DUMMY_SPAN).into()),
         }
     }
 
@@ -519,7 +508,7 @@ impl<'a> Analyzer<'a> {
         &mut self,
         base_fn: Symbol,
         comptime_args: Vec<ComptimeValue>,
-    ) -> Result<Decl, TypeError> {
+    ) -> TypecheckResult<Decl> {
         let key = ast::MonomorphKey {
             base_fn,
             comptime_args: comptime_args.clone(),
@@ -530,10 +519,7 @@ impl<'a> Analyzer<'a> {
         }
 
         let Some(sig) = self.function_sigs.get(&base_fn).cloned() else {
-            return Err(TypeError::new(
-                TypeErrorKind::UnknownSymbol(base_fn),
-                DUMMY_SPAN,
-            ));
+            return Err(TypeError::new(TypeErrorKind::UnknownSymbol(base_fn), DUMMY_SPAN).into());
         };
 
         let sig_inner = sig.node;
@@ -584,17 +570,15 @@ impl<'a> Analyzer<'a> {
         });
 
         let Some(original_decl) = self.module_decls.get_mut(&base_fn) else {
-            return Err(TypeError::new(
-                TypeErrorKind::UnknownSymbol(base_fn),
-                DUMMY_SPAN,
-            ));
+            return Err(TypeError::new(TypeErrorKind::UnknownSymbol(base_fn), DUMMY_SPAN).into());
         };
 
         let DeclKind::Procedure { block, .. } = original_decl else {
             return Err(TypeError::new(
                 TypeErrorKind::GenericInstantiation("not a procedure".to_string()),
                 DUMMY_SPAN,
-            ));
+            )
+            .into());
         };
 
         // TOOD: remove this clone, its so we drob the mut borrow
@@ -621,7 +605,7 @@ impl<'a> Analyzer<'a> {
         Ok(decl)
     }
 
-    pub fn analyze_expr(&mut self, expr: &mut Expr) -> Result<TypedValue, TypeError> {
+    pub fn analyze_expr(&mut self, expr: &mut Expr) -> TypecheckResult<TypedValue> {
         match &mut expr.node {
             ExprKind::Value(v) => match v {
                 ValueKind::Int(n) => Ok(TypedValue::comptime(
@@ -663,7 +647,8 @@ impl<'a> Analyzer<'a> {
                             found: rhs_val.ty.clone(),
                         },
                         expr.span.clone(),
-                    ));
+                    )
+                    .into());
                 }
 
                 if lhs_val.is_comptime() && rhs_val.is_comptime() {
@@ -739,7 +724,8 @@ impl<'a> Analyzer<'a> {
                                     return Err(TypeError::new(
                                         TypeErrorKind::TypeAnnotationRequired,
                                         expr.span.clone(),
-                                    ));
+                                    )
+                                    .into());
                                 }
 
                                 Box::new(elem_vals[0].ty.clone())
@@ -754,7 +740,8 @@ impl<'a> Analyzer<'a> {
                                                 found: elem_vals.last().unwrap().ty.clone(),
                                             },
                                             expr.span.clone(),
-                                        ));
+                                        )
+                                        .into());
                                     }
                                     self.structural_typecheck(
                                         &*arr_ty,
@@ -795,13 +782,15 @@ impl<'a> Analyzer<'a> {
                             found: expr_val.ty.clone(),
                         },
                         expr.span.clone(),
-                    ));
+                    )
+                    .into());
                 };
                 if *index >= tys.len() {
                     return Err(TypeError::new(
                         TypeErrorKind::ExpectedArrayIndex,
                         expr.span.clone(),
-                    ));
+                    )
+                    .into());
                 }
                 let ty = tys[*index].clone();
                 Ok(TypedValue::runtime(ty))
@@ -822,7 +811,8 @@ impl<'a> Analyzer<'a> {
                             found: expr_val.ty.clone(),
                         },
                         expr.span.clone(),
-                    ));
+                    )
+                    .into());
                 };
                 Ok(TypedValue::runtime((**ty).clone()))
             }
@@ -845,23 +835,19 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn get_field_type(
-        expr_ty: &TypeKind,
-        field: Symbol,
-        span: Span,
-    ) -> Result<TypeKind, TypeError> {
+    fn get_field_type(expr_ty: &TypeKind, field: Symbol, span: Span) -> TypecheckResult<TypeKind> {
         match expr_ty {
             TypeKind::Record(fields) => fields
                 .iter()
                 .find(|f| f.name == field)
                 .and_then(|f| f.ty.as_ref())
                 .map(|t| t.node.clone())
-                .ok_or_else(|| TypeError::new(TypeErrorKind::UnknownField(field), span)),
-            _ => Err(TypeError::new(TypeErrorKind::ExpectedRecord, span)),
+                .ok_or_else(|| TypeError::new(TypeErrorKind::UnknownField(field), span).into()),
+            _ => Err(TypeError::new(TypeErrorKind::ExpectedRecord, span).into()),
         }
     }
 
-    fn analyze_call(&mut self, call: &mut Call) -> Result<TypedValue, TypeError> {
+    fn analyze_call(&mut self, call: &mut Call) -> TypecheckResult<TypedValue> {
         let arg_vals: Vec<_> = call
             .args
             .iter_mut()
@@ -886,7 +872,8 @@ impl<'a> Analyzer<'a> {
                     found: found_count,
                 },
                 call.callee.span.clone(),
-            ));
+            )
+            .into());
         }
 
         let min_expected = if is_variadic {
@@ -901,7 +888,8 @@ impl<'a> Analyzer<'a> {
                     found: found_count,
                 },
                 call.callee.span.clone(),
-            ));
+            )
+            .into());
         }
 
         let mut comptime_args = Vec::new();
@@ -914,7 +902,8 @@ impl<'a> Analyzer<'a> {
                     return Err(TypeError::new(
                         TypeErrorKind::ComptimeArgRequired,
                         call.callee.span.clone(),
-                    ));
+                    )
+                    .into());
                 }
             } else {
                 non_comptime_args.push(call.args[i].clone());
@@ -996,14 +985,15 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn resolve_callee_signature(&self, callee: &Expr) -> Result<(Signature, Span), TypeError> {
+    fn resolve_callee_signature(&self, callee: &Expr) -> TypecheckResult<(Signature, Span)> {
         match &callee.node {
             ExprKind::Value(ValueKind::Ident(name)) => {
                 let Some(sig) = self.function_sigs.get(name) else {
                     return Err(TypeError::new(
                         TypeErrorKind::UnknownSymbol(*name),
                         callee.span.clone(),
-                    ));
+                    )
+                    .into());
                 };
                 Ok((sig.clone(), callee.span.clone()))
             }
@@ -1012,14 +1002,12 @@ impl<'a> Analyzer<'a> {
                     return Err(TypeError::new(
                         TypeErrorKind::UnknownMethod(*method_name),
                         callee.span.clone(),
-                    ));
+                    )
+                    .into());
                 };
                 Ok((sig.clone(), callee.span.clone()))
             }
-            _ => Err(TypeError::new(
-                TypeErrorKind::NotCallable,
-                callee.span.clone(),
-            )),
+            _ => Err(TypeError::new(TypeErrorKind::NotCallable, callee.span.clone()).into()),
         }
     }
 
@@ -1029,7 +1017,7 @@ impl<'a> Analyzer<'a> {
         expr_ty: &TypeKind,
         declared_ty: &TypeKind,
         declared_ty_span: Span,
-    ) -> Result<(), TypeError> {
+    ) -> TypecheckResult<()> {
         match (expr_ty, declared_ty) {
             (TypeKind::TypeAlias(expr_sym), TypeKind::TypeAlias(declared_sym)) => {
                 if *expr_sym != *declared_sym {
@@ -1039,7 +1027,8 @@ impl<'a> Analyzer<'a> {
                             found: expr_ty.clone(),
                         },
                         declared_ty_span,
-                    ));
+                    )
+                    .into());
                 }
             }
             // TODO: is this allowed?
@@ -1059,7 +1048,8 @@ impl<'a> Analyzer<'a> {
                             found: expr_variant.clone(),
                         },
                         declared_ty_span,
-                    ));
+                    )
+                    .into());
                 }
             }
             (TypeKind::Record(expr_fields), TypeKind::Record(declared_fields)) => {
@@ -1085,7 +1075,8 @@ impl<'a> Analyzer<'a> {
                                     .collect(),
                             },
                             declared_ty_span,
-                        ));
+                        )
+                        .into());
                     }
 
                     let expr_field_ty = &expr_field_set[field_name];
@@ -1097,7 +1088,8 @@ impl<'a> Analyzer<'a> {
                                 found: expr_field_ty.clone().unwrap_or(TypeKind::Int),
                             },
                             declared_ty_span,
-                        ));
+                        )
+                        .into());
                     }
                 }
             }
@@ -1114,7 +1106,8 @@ impl<'a> Analyzer<'a> {
                             found: *size2.clone(),
                         },
                         declared_ty_span,
-                    ));
+                    )
+                    .into());
                 }
             }
             (TypeKind::Alloc(AllocKind::Str(_), _), TypeKind::Alloc(AllocKind::Str(_), _)) => {}
@@ -1128,7 +1121,8 @@ impl<'a> Analyzer<'a> {
                             found: expr_ty.clone(),
                         },
                         declared_ty_span,
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -1144,7 +1138,7 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    pub fn typecheck_module(&mut self, module: &mut Module) -> Result<(), TypeError> {
+    pub fn typecheck_module(&mut self, module: &mut Module) -> TypecheckResult<()> {
         for decl in &module.declarations {
             if let DeclKind::Procedure { name, .. } = &decl.node {
                 self.module_decls.insert(name.node, decl.node.clone());
@@ -1160,7 +1154,7 @@ impl<'a> Analyzer<'a> {
 
     #[allow(unused)]
     // found_main is used but rust analyzer complains
-    fn check_entry_point(&mut self) -> Result<(), TypeError> {
+    fn check_entry_point(&mut self) -> TypecheckResult<()> {
         let mut found_main = false;
         for function in self.function_sigs.keys() {
             let function_name = self.front_ctx.resolve(*function);
@@ -1172,15 +1166,12 @@ impl<'a> Analyzer<'a> {
 
         #[cfg(not(test))]
         if !found_main {
-            return Err(TypeError::new(
-                TypeErrorKind::MissingMainFunction,
-                DUMMY_SPAN,
-            ));
+            return Err(TypeError::new(TypeErrorKind::MissingMainFunction, DUMMY_SPAN).into());
         }
         Ok(())
     }
 
-    fn analyze_decl(&mut self, decl: &mut Decl) -> Result<(), TypeError> {
+    fn analyze_decl(&mut self, decl: &mut Decl) -> TypecheckResult<()> {
         match &mut decl.node {
             DeclKind::Extern {
                 name,
@@ -1211,10 +1202,9 @@ impl<'a> Analyzer<'a> {
                     if let Some(cv) = val.comptime_value {
                         self.comptime_env.insert(name.node, cv);
                     } else {
-                        return Err(TypeError::new(
-                            TypeErrorKind::NotComptime,
-                            expr.span.clone(),
-                        ));
+                        return Err(
+                            TypeError::new(TypeErrorKind::NotComptime, expr.span.clone()).into(),
+                        );
                     }
                 }
                 *ty = Some(inferred_ty.clone());
@@ -1236,7 +1226,8 @@ impl<'a> Analyzer<'a> {
                         return Err(TypeError::new(
                             TypeErrorKind::FnTypeExpected,
                             declared_fn_ty.span.clone(),
-                        ));
+                        )
+                        .into());
                     };
                     if sig.node != **fn_sig {
                         return Err(TypeError::new(
@@ -1245,7 +1236,8 @@ impl<'a> Analyzer<'a> {
                                 found: Box::new(sig.node.clone()),
                             },
                             sig.span.clone(),
-                        ));
+                        )
+                        .into());
                     }
                 } else {
                     *fn_ty = Some(Type::synthetic(TypeKind::Fn(Box::new(sig.node.clone()))));
@@ -1280,7 +1272,7 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn analyze_block(&mut self, block: &mut Block) -> Result<(), TypeError> {
+    fn analyze_block(&mut self, block: &mut Block) -> TypecheckResult<()> {
         for stmt in &mut block.node.stmts {
             self.analyze_stmt(stmt)?;
         }
@@ -1290,7 +1282,7 @@ impl<'a> Analyzer<'a> {
         Ok(())
     }
 
-    fn analyze_stmt(&mut self, stmt: &mut Stmt) -> Result<(), TypeError> {
+    fn analyze_stmt(&mut self, stmt: &mut Stmt) -> TypecheckResult<()> {
         match &mut stmt.node {
             StmtKind::ValDec {
                 name,
@@ -1313,10 +1305,9 @@ impl<'a> Analyzer<'a> {
                     if let Some(cv) = val.comptime_value {
                         self.comptime_env.insert(name.node, cv);
                     } else {
-                        return Err(TypeError::new(
-                            TypeErrorKind::NotComptime,
-                            expr.span.clone(),
-                        ));
+                        return Err(
+                            TypeError::new(TypeErrorKind::NotComptime, expr.span.clone()).into(),
+                        );
                     }
                 }
 
@@ -1327,10 +1318,9 @@ impl<'a> Analyzer<'a> {
             StmtKind::Assign { location, expr } => {
                 let location_val = self.analyze_expr(location)?;
                 if !location.node.assignable() {
-                    return Err(TypeError::new(
-                        TypeErrorKind::Unassignable,
-                        location.span.clone(),
-                    ));
+                    return Err(
+                        TypeError::new(TypeErrorKind::Unassignable, location.span.clone()).into(),
+                    );
                 }
 
                 let val = self.analyze_expr(expr)?;
@@ -1362,20 +1352,23 @@ impl<'a> Analyzer<'a> {
                                 return Err(TypeError::new(
                                     TypeErrorKind::ExpectedVariant,
                                     scrutinee.span.clone(),
-                                ));
+                                )
+                                .into());
                             };
                             let Some(variant) = vfields.iter().find(|v| v.name.node == *name)
                             else {
                                 return Err(TypeError::new(
                                     TypeErrorKind::UnknownSymbol(*name),
                                     arm.pat.span.clone(),
-                                ));
+                                )
+                                .into());
                             };
                             if bindings.len() != variant.adts.len() {
                                 return Err(TypeError::new(
                                     TypeErrorKind::ExpectedVariant,
                                     arm.pat.span.clone(),
-                                ));
+                                )
+                                .into());
                             }
                             for (binding, adt) in bindings.iter().zip(variant.adts.iter()) {
                                 self.bind_pattern(binding, adt);
@@ -1386,7 +1379,8 @@ impl<'a> Analyzer<'a> {
                                 return Err(TypeError::new(
                                     TypeErrorKind::ExpectedRecord,
                                     scrutinee.span.clone(),
-                                ));
+                                )
+                                .into());
                             };
                             let pat_ty = TypeKind::Record(fields.clone());
                             self.structural_typecheck(
@@ -1407,7 +1401,8 @@ impl<'a> Analyzer<'a> {
                                             found: scrutinee_val.ty,
                                         },
                                         scrutinee.span.clone(),
-                                    ));
+                                    )
+                                    .into());
                                 }
                             }
                             _ => todo!(),
@@ -1432,10 +1427,9 @@ impl<'a> Analyzer<'a> {
             } => {
                 let iter_val = self.analyze_expr(iter)?;
                 if !iter_val.ty.is_iterable() {
-                    return Err(TypeError::new(
-                        TypeErrorKind::ExpectedIterable,
-                        iter.span.clone(),
-                    ));
+                    return Err(
+                        TypeError::new(TypeErrorKind::ExpectedIterable, iter.span.clone()).into(),
+                    );
                 }
 
                 let bind_val_ty = match iter_val.ty {
@@ -1445,7 +1439,8 @@ impl<'a> Analyzer<'a> {
                         return Err(TypeError::new(
                             TypeErrorKind::ExpectedIterable,
                             iter.span.clone(),
-                        ));
+                        )
+                        .into());
                     }
                 };
 
@@ -1463,3 +1458,6 @@ pub fn typecheck(ctx: &mut Ctx, module: &mut Module) -> TypecheckResult<()> {
     analyzer.typecheck_module(module)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
