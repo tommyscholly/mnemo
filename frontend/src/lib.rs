@@ -6,6 +6,7 @@ mod lex;
 mod macros;
 pub mod mir;
 mod parse;
+mod regions;
 mod span;
 mod to_mir;
 

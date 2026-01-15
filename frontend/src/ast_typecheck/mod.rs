@@ -138,7 +138,7 @@ impl<'a> Analyzer<'a> {
                 if tys.is_empty() {
                     TypeKind::Alloc(
                         AllocKind::Array(Box::new(TypeKind::Unit), ComptimeValue::Int(0).into()),
-                        Region::Stack,
+                        Region::Scoped(0),
                     )
                 } else {
                     let ty = tys.first().unwrap();
@@ -148,7 +148,7 @@ impl<'a> Analyzer<'a> {
                             Box::new(ty.clone()),
                             ComptimeValue::Int(tys.len() as i128).into(),
                         ),
-                        Region::Stack,
+                        Region::Scoped(0),
                     )
                 }
             }
@@ -234,7 +234,9 @@ impl<'a> Analyzer<'a> {
     fn substitute_type(&self, ty: &TypeKind, subs: &HashMap<Symbol, ComptimeArg>) -> TypeKind {
         match ty {
             TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap().ty,
-            TypeKind::Ptr(inner) => TypeKind::Ptr(Box::new(self.substitute_type(inner, subs))),
+            TypeKind::Ptr(inner, region) => {
+                TypeKind::Ptr(Box::new(self.substitute_type(inner, subs)), region.clone())
+            }
             TypeKind::Alloc(kind, region) => {
                 TypeKind::Alloc(self.substitute_alloc_kind(kind, subs), *region)
             }
@@ -693,7 +695,7 @@ impl<'a> Analyzer<'a> {
                     }
                 }
 
-                let region_handle = region.unwrap_or(Region::Stack);
+                let region_handle = region.unwrap_or(Region::Scoped(0));
                 let resolved_kind = match kind {
                     AllocKind::Tuple(tys) => {
                         let mut types = Vec::new();
@@ -789,7 +791,7 @@ impl<'a> Analyzer<'a> {
                 let TypeKind::Alloc(AllocKind::Tuple(tys), _) = &expr_val.ty else {
                     return Err(TypeError::new(
                         TypeErrorKind::ExpectedType {
-                            expected: TypeKind::Alloc(AllocKind::Tuple(vec![]), Region::Stack),
+                            expected: TypeKind::Alloc(AllocKind::Tuple(vec![]), Region::Scoped(0)),
                             found: expr_val.ty.clone(),
                         },
                         expr.span.clone(),
@@ -815,7 +817,7 @@ impl<'a> Analyzer<'a> {
                                     Box::new(TypeKind::Int),
                                     Box::new(ComptimeValue::Int(0)),
                                 ),
-                                Region::Stack,
+                                Region::Scoped(0),
                             ),
                             found: expr_val.ty.clone(),
                         },
@@ -966,9 +968,10 @@ impl<'a> Analyzer<'a> {
     fn resolve_type_with_subs(&self, ty: &TypeKind, subs: &HashMap<Symbol, TypeKind>) -> TypeKind {
         match ty {
             TypeKind::TypeAlias(sym) => subs.get(sym).cloned().unwrap(),
-            TypeKind::Ptr(inner) => {
-                TypeKind::Ptr(Box::new(self.resolve_type_with_subs(inner, subs)))
-            }
+            TypeKind::Ptr(inner, region) => TypeKind::Ptr(
+                Box::new(self.resolve_type_with_subs(inner, subs)),
+                region.clone(),
+            ),
             TypeKind::Alloc(kind, region) => TypeKind::Alloc(kind.clone(), *region),
             TypeKind::Fn(sig) => {
                 let new_params: Vec<_> = sig
@@ -1116,7 +1119,7 @@ impl<'a> Analyzer<'a> {
                 }
             }
             (TypeKind::Alloc(AllocKind::Str(_), _), TypeKind::Alloc(AllocKind::Str(_), _)) => {}
-            (TypeKind::Alloc(AllocKind::Str(_), _), TypeKind::Ptr(c))
+            (TypeKind::Alloc(AllocKind::Str(_), _), TypeKind::Ptr(c, _))
                 if (**c) == TypeKind::Char => {}
             _ => {
                 if declared_ty != expr_ty {

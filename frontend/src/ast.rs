@@ -66,7 +66,7 @@ pub enum TypeKind {
     Fn(Box<SignatureInner>),
     Int,
     // all ptrs must be qualified with a region (at some point)
-    Ptr(Box<TypeKind> /*, Region */),
+    Ptr(Box<TypeKind>, Option<Region>),
     Record(Vec<RecordField>),
     Region,
     Resolved(Box<TypeKind>),
@@ -112,16 +112,26 @@ pub enum AllocKind {
 
 impl AllocKind {
     pub fn fill_type(&mut self, ty: TypeKind) {
-        if let AllocKind::Array(ty_, _) = self { *ty_ = Box::new(ty) }
+        if let AllocKind::Array(ty_, _) = self {
+            *ty_ = Box::new(ty)
+        }
     }
 }
 
+// Scope ids work upwards from the current scope
+pub type ScopeId = usize;
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum Region {
-    // need to track where a region originates from
-    Stack,
-    Local,
-    Generic(Symbol),
+    /// Lives forever: globals, string literals, leaked allocations
+    Static,
+
+    /// Named region parameter: foo :: (comptime A: Region, x: ^i32 @ A)
+    Named(Symbol),
+
+    /// Anonymous region bound to a lexical scope
+    /// The ScopeId ties it to a specific block/expression
+    Scoped(ScopeId),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

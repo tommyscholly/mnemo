@@ -726,7 +726,7 @@ fn parse_region_alloc() {
         *kind,
         AllocKind::Array(TypeKind::Any.into(), ComptimeValue::Int(2).into())
     );
-    assert_eq!(*region, Some(Region::Local));
+    assert_eq!(*region, Some(Region::Scoped(0)));
 
     let StmtKind::ValDec { expr, .. } = &block.node.stmts[1].node else {
         unreachable!()
@@ -737,7 +737,7 @@ fn parse_region_alloc() {
     };
     // types not resolved yet
     assert_eq!(*kind, AllocKind::Tuple(vec![]));
-    assert_eq!(*region, Some(Region::Generic(Symbol(1))));
+    assert_eq!(*region, Some(Region::Named(Symbol(1))));
 }
 
 #[test]

@@ -111,9 +111,9 @@ fn parse_potential_region_alloc(
             let region_kind = match region_expr.node {
                 ExprKind::Value(ValueKind::Ident(name)) => {
                     if ctx.resolve(name) == "local" {
-                        Region::Local
+                        Region::Scoped(0)
                     } else {
-                        Region::Generic(name)
+                        Region::Named(name)
                     }
                 }
                 ExprKind::Comptime(ComptimeValue::Region(r)) => r,
@@ -521,7 +521,7 @@ fn parse_primary(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseRes
         Token::Identifier(name) => {
             if ctx.resolve(name) == "local" {
                 return Ok(Spanned::new(
-                    ExprKind::Comptime(ComptimeValue::Region(Region::Local)),
+                    ExprKind::Comptime(ComptimeValue::Region(Region::Scoped(0))),
                     token.span,
                 ));
             }
@@ -906,9 +906,9 @@ fn check_region_type_annotation(
     let region_ident = expect_identifier(tokens)?.node;
 
     let region = if ctx.resolve(region_ident) == "local" {
-        Region::Local
+        Region::Scoped(0)
     } else {
-        Region::Generic(region_ident)
+        Region::Named(region_ident)
     };
 
     Ok(Some(region))
@@ -1045,8 +1045,10 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
                 None => return Err(ParseError::new(ParseErrorKind::ExpectedType, caret_span)),
             };
 
+            let region = check_region_type_annotation(ctx, tokens)?;
+
             let span = caret_span.merge(&ty.span);
-            Spanned::new(TypeKind::Ptr(Box::new(ty.node)), span)
+            Spanned::new(TypeKind::Ptr(Box::new(ty.node), region), span)
         }
         Some(Token::LBrace) => {
             let fields = extract_typedef_fields(tokens)?;
@@ -1104,7 +1106,7 @@ fn parse_type(ctx: &mut Ctx, tokens: &mut VecDeque<SpannedToken>) -> ParseResult
 
             let region = check_region_type_annotation(ctx, tokens)?;
             Spanned::new(
-                TypeKind::Alloc(alloc_kind, region.unwrap_or(Region::Stack)),
+                TypeKind::Alloc(alloc_kind, region.unwrap_or(Region::Scoped(0))),
                 span,
             )
         }

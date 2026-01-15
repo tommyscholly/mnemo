@@ -996,7 +996,7 @@ impl AstVisitor for AstToMIR<'_> {
                         );
 
                         let array_load = self.visit_expr(iter);
-                        let array_local = self.new_local(&TypeKind::Alloc(kind, Region::Local));
+                        let array_local = self.new_local(&TypeKind::Alloc(kind, Region::Scoped(0)));
                         self.add_stmt(mir::Statement::Assign(array_local, array_load));
 
                         let len_local = self.new_local(&TypeKind::Int);
@@ -1179,7 +1179,7 @@ fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
             AllocKind::Variant(_) => unreachable!(),
             AllocKind::Str(_) => mir::Ty::Str,
         },
-        TypeKind::Ptr(ty) => mir::Ty::Ptr(Box::new(ast_type_to_mir_type(ty))),
+        TypeKind::Ptr(ty, _) => mir::Ty::Ptr(Box::new(ast_type_to_mir_type(ty))),
         TypeKind::Char => mir::Ty::Char,
         TypeKind::Variant(variants) => {
             let mir_variant_tys = variants
