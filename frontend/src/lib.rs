@@ -7,6 +7,7 @@ mod macros;
 pub mod mir;
 mod parse;
 mod regions;
+mod scope;
 mod span;
 mod to_mir;
 
@@ -48,5 +49,8 @@ pub fn do_frontend(file: &str, output_mir: bool) -> Result<(mir::Module, Ctx), S
     ast_visitor.visit_module(module);
 
     let module = mir::run_passes(ast_visitor.produce_module(), output_mir);
+
+    regions::validate_regions(&module)?;
+
     Ok((module, ctx))
 }

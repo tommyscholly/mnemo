@@ -5,6 +5,8 @@ use crate::lex::BinOp;
 // corresponds to locals in the defining function
 pub type LocalId = usize;
 pub type BlockId = usize;
+pub type RegionId = usize;
+pub const STATIC_REGION: RegionId = 0;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Ty {
@@ -13,7 +15,7 @@ pub enum Ty {
     Char,
     DynArray(Box<Ty>),
     Int,
-    Ptr(Box<Ty>),
+    Ptr(Box<Ty>, RegionId),
     Record(Vec<Ty>),
     Str,
     TaggedUnion(Vec<(u8, Ty)>),
@@ -33,7 +35,7 @@ impl Ty {
             Ty::Array(ty, len) => ty.bytes() * *len,
             Ty::DynArray(ty) => ty.bytes(),
             Ty::Tuple(tys) => tys.iter().map(|t| t.bytes()).sum(),
-            Ty::Ptr(_) => 4,
+            Ty::Ptr(_, _) => 4,
             Ty::TaggedUnion(tags_tys) => {
                 let max_payload_size = tags_tys.iter().map(|(_tag, ty)| ty.bytes()).max().unwrap();
                 let max_payload_align = tags_tys
@@ -64,7 +66,7 @@ impl Ty {
             Ty::Array(ty, _) => ty.align(),
             Ty::DynArray(ty) => ty.align(),
             Ty::Tuple(tys) => tys.iter().map(|t| t.align()).max().unwrap_or(1),
-            Ty::Ptr(_) => 4,
+            Ty::Ptr(_, _) => 4,
             Ty::TaggedUnion(tags_tys) => {
                 let max_payload_align = tags_tys
                     .iter()
@@ -98,7 +100,7 @@ impl Display for Ty {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
-            Ty::Ptr(ty) => write!(f, "^{}", ty),
+            Ty::Ptr(ty, _) => write!(f, "^{}", ty),
             Ty::TaggedUnion(tags_tys) => {
                 let tags_tys_str = tags_tys
                     .iter()
@@ -278,6 +280,8 @@ pub enum Statement {
     Assign(LocalId, RValue),
     Store(Place, RValue),
     Phi(LocalId, Vec<LocalId>),
+    RegionStart(RegionId),
+    RegionEnd(RegionId),
     Call {
         function_name: String,
         args: Vec<RValue>,
@@ -331,12 +335,20 @@ impl Local {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub struct RegionInfo {
+    pub id: RegionId,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Function {
     pub name: String,
     pub blocks: Vec<BasicBlock>,
     pub parameters: usize,
     pub return_ty: Ty,
     pub locals: Vec<Local>,
+    pub region_params: Vec<RegionInfo>,
+    pub region_outlives: Vec<(RegionId, RegionId)>,
 }
 
 impl IntoIterator for Function {

@@ -93,7 +93,7 @@ impl<'ctx> Llvm<'ctx> {
                 let ty = Self::basic_type_to_llvm_basic_type(ctx, ty);
                 ty.array_type(*len as u32).as_basic_type_enum()
             }
-            mir::Ty::Ptr(_) => ctx.ptr_type(AddressSpace::default()).as_basic_type_enum(),
+            mir::Ty::Ptr(_, _) => ctx.ptr_type(AddressSpace::default()).as_basic_type_enum(),
             mir::Ty::Record(tys) => {
                 let field_tys: Vec<BasicTypeEnum<'ctx>> = tys
                     .iter()
@@ -146,7 +146,7 @@ impl<'ctx> Llvm<'ctx> {
             mir::Ty::Bool => ctx.bool_type().fn_type(&param_types, is_variadic),
             mir::Ty::Char => ctx.i8_type().fn_type(&param_types, is_variadic),
             mir::Ty::Unit => ctx.void_type().fn_type(&param_types, is_variadic),
-            mir::Ty::Ptr(_) => ctx
+            mir::Ty::Ptr(_, _) => ctx
                 .ptr_type(AddressSpace::default())
                 .fn_type(&param_types, is_variadic),
 
@@ -536,6 +536,12 @@ impl<'ctx> Llvm<'ctx> {
                 let (place_ptr, _) = self.place_ptr(place)?;
                 let rvalue = self.compile_rvalue(rvalue, None, llvm_fn, ctx)?;
                 self.builder.build_store(place_ptr, rvalue)?;
+            }
+            mir::Statement::RegionStart(_) => {
+                // Region boundaries are erased at runtime - no codegen needed
+            }
+            mir::Statement::RegionEnd(_) => {
+                // Region boundaries are erased at runtime - no codegen needed
             }
         }
 

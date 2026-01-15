@@ -99,6 +99,12 @@ impl MIRVisualizer for Statement {
                 expr.visualize(indent);
                 println!();
             }
+            Statement::RegionStart(rid) => {
+                println!("region_start %{}", rid);
+            }
+            Statement::RegionEnd(rid) => {
+                println!("region_end %{}", rid);
+            }
         }
     }
 }

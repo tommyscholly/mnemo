@@ -5,6 +5,7 @@ use crate::Spanned;
 use crate::ast::*;
 use crate::ctx::{Ctx, Symbol};
 use crate::mir::{self, Function};
+use crate::scope::{ScopeId, ScopeKind, ScopeTree};
 
 use crate::AstVisitor;
 
@@ -20,10 +21,12 @@ pub struct AstToMIR<'a> {
     constants: HashMap<Symbol, mir::RValue>,
     phi_functions_to_generate: BTreeMap<mir::LocalId, Vec<mir::LocalId>>,
     variants: HashMap<u8, mir::Ty>,
-    // store local types so we can resolve field accesses
     local_types: HashMap<mir::LocalId, TypeKind>,
     externs: Vec<mir::Extern>,
     in_assign_expr: bool,
+    scope_tree: ScopeTree,
+    scope_to_region: HashMap<ScopeId, mir::RegionId>,
+    next_region_id: mir::RegionId,
 }
 
 impl<'a> AstToMIR<'a> {
@@ -41,6 +44,70 @@ impl<'a> AstToMIR<'a> {
             local_types: HashMap::new(),
             externs: Vec::new(),
             in_assign_expr: false,
+            scope_tree: ScopeTree::new(),
+            scope_to_region: HashMap::new(),
+            next_region_id: 1,
+        }
+    }
+
+    fn get_or_create_region(&mut self, scope_id: ScopeId) -> mir::RegionId {
+        if let Some(&region_id) = self.scope_to_region.get(&scope_id) {
+            return region_id;
+        }
+        let region_id = self.next_region_id;
+        self.next_region_id += 1;
+        self.scope_to_region.insert(scope_id, region_id);
+        let scope = self.scope_tree.get_scope(scope_id).unwrap();
+        let name = match &scope.kind {
+            ScopeKind::Region(name) => name.map(|s| self.ctx.resolve(s).to_string()),
+            _ => None,
+        };
+        self.get_current_function()
+            .region_params
+            .push(mir::RegionInfo {
+                id: region_id,
+                name,
+            });
+        region_id
+    }
+
+    fn generate_region_outlives(&mut self) {
+        let mut visited = std::collections::HashSet::new();
+        let scope_ids: Vec<_> = self.scope_to_region.keys().cloned().collect();
+        for &scope_id in &scope_ids {
+            let region_id = self.scope_to_region[&scope_id];
+            let mut current_parent = self.scope_tree.parent_of(scope_id);
+            while let Some(parent_scope_id) = current_parent {
+                if let Some(&parent_region_id) = self.scope_to_region.get(&parent_scope_id) {
+                    if !visited.contains(&(region_id, parent_region_id)) {
+                        self.get_current_function()
+                            .region_outlives
+                            .push((region_id, parent_region_id));
+                        visited.insert((region_id, parent_region_id));
+                    }
+                    break;
+                }
+                current_parent = self.scope_tree.parent_of(parent_scope_id);
+            }
+        }
+    }
+
+    fn emit_region_start(&mut self, scope_id: ScopeId) {
+        let region_id = self.get_or_create_region(scope_id);
+        self.add_stmt(mir::Statement::RegionStart(region_id));
+    }
+
+    fn emit_region_end(&mut self, scope_id: ScopeId) {
+        if let Some(&region_id) = self.scope_to_region.get(&scope_id) {
+            self.add_stmt(mir::Statement::RegionEnd(region_id));
+        }
+    }
+
+    fn ast_region_to_mir_region_id(&mut self, region: &Region) -> mir::RegionId {
+        match region {
+            Region::Static => mir::STATIC_REGION,
+            Region::Named(_) => mir::STATIC_REGION,
+            Region::Scoped(scope_id) => self.get_or_create_region(*scope_id),
         }
     }
 
@@ -62,7 +129,7 @@ impl<'a> AstToMIR<'a> {
 
         self.local_types.insert(local_id, ty.clone());
 
-        let ty = ast_type_to_mir_type(ty);
+        let ty = self.ast_type_to_mir_type(ty);
         self.update_type_information(&ty);
 
         let local = mir::Local::new(local_id, ty);
@@ -199,7 +266,7 @@ impl<'a> AstToMIR<'a> {
         match rvalue {
             mir::RValue::Use(mir::Operand::Copy(place)) => place.local,
             mir::RValue::Use(mir::Operand::Constant(_)) => {
-                let ty = ast_type_to_mir_type(expected_ty);
+                let ty = self.ast_type_to_mir_type(expected_ty);
                 let local_id = self.new_local_with_ty(ty);
                 self.get_current_block()
                     .stmts
@@ -288,7 +355,7 @@ impl<'a> AstToMIR<'a> {
             TypeKind::Variant(variants) => variants[tag].adts.clone(),
             _ => panic!("expected variant type, got {:?}", scrutinee_ty),
         };
-        let field_mir_ty = ast_type_to_mir_type(&field_ty[0].node);
+        let field_mir_ty = self.ast_type_to_mir_type(&field_ty[0].node);
         let place = mir::Place::new(scrutinee_local, mir::PlaceKind::Field(1, field_mir_ty));
         let rvalue = mir::RValue::Use(mir::Operand::Copy(place));
         self.get_current_block()
@@ -324,7 +391,7 @@ impl<'a> AstToMIR<'a> {
             })
             .unwrap_or_else(|| Spanned::new(TypeKind::Int, Default::default()));
 
-        let field_mir_ty = ast_type_to_mir_type(&field_ty.node);
+        let field_mir_ty = self.ast_type_to_mir_type(&field_ty.node);
         let payload_local = self.new_local_with_ty(field_mir_ty.clone());
         let place = mir::Place::new(
             scrutinee_local,
@@ -349,13 +416,13 @@ impl<'a> AstToMIR<'a> {
                     .params
                     .params
                     .iter()
-                    .map(|p| ast_type_to_mir_type(&p.ty.node))
+                    .map(|p| self.ast_type_to_mir_type(&p.ty.node))
                     .collect();
 
                 let return_ty = sig_inner
                     .return_ty
                     .as_ref()
-                    .map(|t| ast_type_to_mir_type(&t.node))
+                    .map(|t| self.ast_type_to_mir_type(&t.node))
                     .unwrap_or(mir::Ty::Unit);
 
                 let name = self.ctx.resolve(name.node).to_string();
@@ -390,7 +457,7 @@ impl<'a> AstToMIR<'a> {
                 let return_ty = sig_inner
                     .return_ty
                     .as_ref()
-                    .map(|t| ast_type_to_mir_type(&t.node))
+                    .map(|t| self.ast_type_to_mir_type(&t.node))
                     .unwrap_or(mir::Ty::Unit);
 
                 let function = mir::Function {
@@ -399,6 +466,8 @@ impl<'a> AstToMIR<'a> {
                     parameters: sig_inner.params.params.len(),
                     return_ty,
                     locals: Vec::new(),
+                    region_params: Vec::new(),
+                    region_outlives: Vec::new(),
                 };
 
                 self.function_table.insert(name_sym, function);
@@ -539,7 +608,7 @@ impl AstVisitor for AstToMIR<'_> {
                         }
                     };
 
-                    let ty = ast_type_to_mir_type(&ty);
+                    let ty = self.ast_type_to_mir_type(&ty);
 
                     let array_size = match kind {
                         AllocKind::Array(_, ref size) => match size.as_ref() {
@@ -561,11 +630,15 @@ impl AstVisitor for AstToMIR<'_> {
                         let elem = self.visit_expr(elem);
                         let (op, ty) = match elem {
                             mir::RValue::Use(mir::Operand::Copy(place)) => {
-                                let local_ty = self.local_types.get(&place.local).unwrap();
-                                (mir::Operand::Copy(place), ast_type_to_mir_type(local_ty))
+                                let local_ty = self.local_types.get(&place.local).unwrap().clone();
+                                (
+                                    mir::Operand::Copy(place),
+                                    self.ast_type_to_mir_type(&local_ty),
+                                )
                             }
                             mir::RValue::Use(mir::Operand::Constant(c)) => {
-                                let local_ty = ast_type_to_mir_type(&Self::type_of_constant(&c));
+                                let local_ty =
+                                    self.ast_type_to_mir_type(&Self::type_of_constant(&c));
 
                                 (mir::Operand::Constant(c), local_ty)
                             }
@@ -587,11 +660,14 @@ impl AstVisitor for AstToMIR<'_> {
 
                 match kind {
                     AllocKind::Array(ty, _) => {
-                        let ty = ast_type_to_mir_type(&ty);
+                        let ty = self.ast_type_to_mir_type(&ty);
                         mir::RValue::Alloc(mir::AllocKind::Array(ty), ops)
                     }
                     AllocKind::Tuple(tys) => {
-                        let tys = tys.into_iter().map(|t| ast_type_to_mir_type(&t)).collect();
+                        let tys = tys
+                            .into_iter()
+                            .map(|t| self.ast_type_to_mir_type(&t))
+                            .collect();
 
                         mir::RValue::Alloc(mir::AllocKind::Tuple(tys), ops)
                     }
@@ -609,11 +685,10 @@ impl AstVisitor for AstToMIR<'_> {
             }
             ExprKind::FieldAccess(expr, field_name) => {
                 let mir_expr = self.visit_expr(*expr);
-                // SAFETY: we should have type checked this, which means that the expr should be a place
                 let place = mir_expr.place().unwrap();
-                let expr_ty = self.local_types.get(&place.local).unwrap();
+                let expr_ty = self.local_types.get(&place.local).unwrap().clone();
 
-                let TypeKind::Record(fields) = expr_ty else {
+                let TypeKind::Record(fields) = &expr_ty else {
                     panic!("expected record type, got {:?}", expr_ty);
                 };
 
@@ -621,7 +696,7 @@ impl AstVisitor for AstToMIR<'_> {
                     .iter()
                     .enumerate()
                     .find(|(_, f)| f.name == field_name)
-                    .map(|(idx, f)| (idx, ast_type_to_mir_type(&f.ty.as_ref().unwrap().node)))
+                    .map(|(idx, f)| (idx, self.ast_type_to_mir_type(&f.ty.as_ref().unwrap().node)))
                     .expect("field not found");
 
                 mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
@@ -645,16 +720,15 @@ impl AstVisitor for AstToMIR<'_> {
             }
             ExprKind::TupleAccess(expr, index) => {
                 let mir_expr = self.visit_expr(*expr);
-                // SAFETY: we should have type checked this, which means that the expr should be a place
                 let place = mir_expr.place().unwrap();
 
                 let TypeKind::Alloc(AllocKind::Tuple(tys), _) =
-                    self.local_types.get(&place.local).unwrap()
+                    self.local_types.get(&place.local).unwrap().clone()
                 else {
                     panic!("expected tuple type, got {:?}", place.kind);
                 };
 
-                let field_ty = ast_type_to_mir_type(&tys[index]);
+                let field_ty = self.ast_type_to_mir_type(&tys[index]);
 
                 mir::RValue::Use(mir::Operand::Copy(mir::Place::new(
                     place.local,
@@ -1137,7 +1211,13 @@ impl AstVisitor for AstToMIR<'_> {
                     }
                 }
 
+                self.scope_tree.enter(ScopeKind::Function(name_sym));
+
                 self.visit_block(block);
+
+                self.generate_region_outlives();
+
+                self.scope_tree.exit();
                 self.current_function = None;
                 self.current_block = 0;
             }
@@ -1155,74 +1235,78 @@ impl AstVisitor for AstToMIR<'_> {
     }
 }
 
-fn ast_type_to_mir_type(ty: &TypeKind) -> mir::Ty {
-    match ty {
-        TypeKind::Int => mir::Ty::Int,
-        TypeKind::Unit => mir::Ty::Unit,
-        TypeKind::Alloc(kind, _) => match kind {
-            // TODO: resolve tuple tys
-            AllocKind::Tuple(tys) => {
-                let tys = tys.iter().map(ast_type_to_mir_type).collect();
-
-                mir::Ty::Tuple(tys)
-            }
-
-            AllocKind::Array(ty, len) => {
-                if let ComptimeValue::Int(len) = **len {
-                    mir::Ty::Array(Box::new(ast_type_to_mir_type(ty)), len as usize)
-                } else {
-                    panic!("comptime int should be resolved by now");
+impl<'a> AstToMIR<'a> {
+    fn ast_type_to_mir_type(&mut self, ty: &TypeKind) -> mir::Ty {
+        match ty {
+            TypeKind::Int => mir::Ty::Int,
+            TypeKind::Unit => mir::Ty::Unit,
+            TypeKind::Alloc(kind, _) => match kind {
+                AllocKind::Tuple(tys) => {
+                    let tys = tys.iter().map(|t| self.ast_type_to_mir_type(t)).collect();
+                    mir::Ty::Tuple(tys)
                 }
-            }
 
-            AllocKind::Record(_) => unreachable!(),
-            AllocKind::Variant(_) => unreachable!(),
-            AllocKind::Str(_) => mir::Ty::Str,
-        },
-        TypeKind::Ptr(ty, _) => mir::Ty::Ptr(Box::new(ast_type_to_mir_type(ty))),
-        TypeKind::Char => mir::Ty::Char,
-        TypeKind::Variant(variants) => {
-            let mir_variant_tys = variants
-                .iter()
-                .map(|variant| {
-                    let adts = &variant.adts;
-                    let variant_ty = if adts.len() == 1 {
-                        ast_type_to_mir_type(&adts[0].node)
-                    } else if adts.is_empty() {
-                        mir::Ty::Unit
+                AllocKind::Array(ty, len) => {
+                    if let ComptimeValue::Int(len) = **len {
+                        mir::Ty::Array(Box::new(self.ast_type_to_mir_type(ty)), len as usize)
                     } else {
-                        let tys = adts
-                            .iter()
-                            .map(|tk| ast_type_to_mir_type(&tk.node))
-                            .collect();
+                        panic!("comptime int should be resolved by now");
+                    }
+                }
 
-                        mir::Ty::Tuple(tys)
-                    };
+                AllocKind::Record(_) => unreachable!(),
+                AllocKind::Variant(_) => unreachable!(),
+                AllocKind::Str(_) => mir::Ty::Str,
+            },
+            TypeKind::Ptr(ty, region) => {
+                let region_id = region
+                    .as_ref()
+                    .map(|r| self.ast_region_to_mir_region_id(r))
+                    .unwrap_or(mir::STATIC_REGION);
+                mir::Ty::Ptr(Box::new(self.ast_type_to_mir_type(ty)), region_id)
+            }
+            TypeKind::Char => mir::Ty::Char,
+            TypeKind::Variant(variants) => {
+                let mir_variant_tys = variants
+                    .iter()
+                    .map(|variant| {
+                        let adts = &variant.adts;
+                        let variant_ty = if adts.len() == 1 {
+                            self.ast_type_to_mir_type(&adts[0].node)
+                        } else if adts.is_empty() {
+                            mir::Ty::Unit
+                        } else {
+                            let tys = adts
+                                .iter()
+                                .map(|tk| self.ast_type_to_mir_type(&tk.node))
+                                .collect();
+                            mir::Ty::Tuple(tys)
+                        };
 
-                    let union_tag = variant.name.node.0;
-
-                    (union_tag as u8, variant_ty)
-                })
-                .collect();
-
-            mir::Ty::TaggedUnion(mir_variant_tys)
+                        let union_tag = variant.name.node.0;
+                        (union_tag as u8, variant_ty)
+                    })
+                    .collect();
+                mir::Ty::TaggedUnion(mir_variant_tys)
+            }
+            TypeKind::Record(fields) => {
+                let field_tys = fields
+                    .iter()
+                    .map(|f| {
+                        self.ast_type_to_mir_type(
+                            &f.ty
+                                .as_ref()
+                                .expect("all field types should be resolved by now")
+                                .node,
+                        )
+                    })
+                    .collect();
+                mir::Ty::Record(field_tys)
+            }
+            TypeKind::Bool => mir::Ty::Bool,
+            TypeKind::Variadic => mir::Ty::Variadic,
+            TypeKind::Fn(_) => mir::Ty::Unit,
+            tk => panic!("unimplemented type kind {:?}", tk),
         }
-        TypeKind::Record(fields) => {
-            let field_tys = fields
-                .iter()
-                .map(|f| {
-                    ast_type_to_mir_type(
-                        &f.ty
-                            .as_ref()
-                            .expect("all field types should be resolved by now")
-                            .node,
-                    )
-                })
-                .collect();
-            mir::Ty::Record(field_tys)
-        }
-        TypeKind::Bool => mir::Ty::Bool,
-        TypeKind::Variadic => mir::Ty::Variadic,
-        tk => panic!("unimplemented type kind {:?}", tk),
     }
 }
