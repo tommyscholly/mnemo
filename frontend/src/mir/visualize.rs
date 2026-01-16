@@ -29,7 +29,11 @@ impl MIRVisualizer for RValue {
                 print!(" {op} ");
                 rhs.visualize(indent);
             }
-            RValue::Alloc(kind, ops) => {
+            RValue::Alloc {
+                kind,
+                operands: ops,
+                ..
+            } => {
                 print!("alloc({}) {{", kind);
                 for (i, op) in ops.iter().enumerate() {
                     op.visualize(indent);

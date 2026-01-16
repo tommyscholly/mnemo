@@ -564,7 +564,7 @@ impl AstVisitor for AstToMIR<'_> {
                 kind,
                 elements,
                 default_elem,
-                region: _,
+                region,
             } => {
                 let mut ops = Vec::new();
                 let mut elem_types = Vec::new();
@@ -642,10 +642,15 @@ impl AstVisitor for AstToMIR<'_> {
                     }
                 }
 
+                let is_malloc = region.is_some();
                 match kind {
                     AllocKind::Array(ty, _) => {
                         let ty = self.ast_type_to_mir_type(&ty);
-                        mir::RValue::Alloc(mir::AllocKind::Array(ty), ops)
+                        mir::RValue::Alloc {
+                            kind: mir::AllocKind::Array(ty),
+                            operands: ops,
+                            malloc: is_malloc,
+                        }
                     }
                     AllocKind::Tuple(tys) => {
                         let tys = tys
@@ -653,18 +658,32 @@ impl AstVisitor for AstToMIR<'_> {
                             .map(|t| self.ast_type_to_mir_type(&t))
                             .collect();
 
-                        mir::RValue::Alloc(mir::AllocKind::Tuple(tys), ops)
+                        mir::RValue::Alloc {
+                            kind: mir::AllocKind::Tuple(tys),
+                            operands: ops,
+                            malloc: is_malloc,
+                        }
                     }
-                    AllocKind::Record(_) => {
-                        mir::RValue::Alloc(mir::AllocKind::Record(elem_types), ops)
-                    }
+                    AllocKind::Record(_) => mir::RValue::Alloc {
+                        kind: mir::AllocKind::Record(elem_types),
+                        operands: ops,
+                        malloc: is_malloc,
+                    },
                     AllocKind::Variant(variant_name) => {
                         let variant_id = variant_name.0 as u8;
                         let ty = self.variants.get(&variant_id).unwrap();
 
-                        mir::RValue::Alloc(mir::AllocKind::Variant(variant_id, ty.clone()), ops)
+                        mir::RValue::Alloc {
+                            kind: mir::AllocKind::Variant(variant_id, ty.clone()),
+                            operands: ops,
+                            malloc: is_malloc,
+                        }
                     }
-                    AllocKind::Str(s) => mir::RValue::Alloc(mir::AllocKind::Str(s), ops),
+                    AllocKind::Str(s) => mir::RValue::Alloc {
+                        kind: mir::AllocKind::Str(s),
+                        operands: ops,
+                        malloc: is_malloc,
+                    },
                 }
             }
             ExprKind::FieldAccess(expr, field_name) => {

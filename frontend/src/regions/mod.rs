@@ -158,7 +158,9 @@ impl<'a> RegionChecker<'a> {
                 self.check_operand(lhs);
                 self.check_operand(rhs);
             }
-            mir::RValue::Alloc(_, operands) => {
+            mir::RValue::Alloc {
+                kind: _, operands, ..
+            } => {
                 for op in operands {
                     self.check_operand(op);
                 }

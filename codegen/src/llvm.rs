@@ -315,7 +315,11 @@ impl<'ctx> Llvm<'ctx> {
                     _ => todo!(),
                 }
             }
-            mir::RValue::Alloc(alloc_kind, operands) => {
+            mir::RValue::Alloc {
+                kind: alloc_kind,
+                operands,
+                malloc,
+            } => {
                 match alloc_kind {
                     AllocKind::Array(ty_hint) => {
                         let elem_type = Self::basic_type_to_llvm_basic_type(self.ctx(), ty_hint);
@@ -323,9 +327,13 @@ impl<'ctx> Llvm<'ctx> {
                         let array_len = operands.len() as u32;
                         let array_type = elem_type.array_type(array_len);
 
-                        // TODO: for mem2reg, allocas should ideally happen
-                        // in the function's entry block, not the current builder position.
-                        let array_ptr = self.builder.build_alloca(array_type, "array_alloca")?;
+                        let array_ptr = if *malloc {
+                            self.builder.build_malloc(array_type, "array_malloc")?
+                        } else {
+                            // TODO: for mem2reg, allocas should ideally happen
+                            // in the function's entry block, not the current builder position.
+                            self.builder.build_alloca(array_type, "array_alloca")?
+                        };
 
                         let i32_type = self.ctx().i32_type();
                         let zero = i32_type.const_zero();

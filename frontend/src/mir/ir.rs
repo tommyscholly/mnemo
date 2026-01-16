@@ -177,7 +177,7 @@ impl RValue {
                 // Fallback: use the type of the left operand
                 _ => lhs.type_of(locals),
             },
-            RValue::Alloc(kind, operands) => match kind {
+            RValue::Alloc { kind, operands, .. } => match kind {
                 AllocKind::Array(ty) => Ty::Array(Box::new(ty.clone()), operands.len()),
                 AllocKind::Record(tys) => Ty::Record(tys.clone()),
                 AllocKind::Str(_) => Ty::Str,
@@ -259,7 +259,11 @@ impl Display for AllocKind {
 pub enum RValue {
     Use(Operand),
     BinOp(BinOp, Operand, Operand),
-    Alloc(AllocKind, Vec<Operand>),
+    Alloc {
+        kind: AllocKind,
+        operands: Vec<Operand>,
+        malloc: bool,
+    },
 }
 
 impl RValue {
